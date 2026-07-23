@@ -759,16 +759,6 @@ export class CoordinationServer {
     }
   }
 
-  /** The set of member ids with a live authenticated connection in the session. */
-  private connectedMemberIds(session: SessionId): string[] {
-    const set = this.bySession.get(sessionKey(session));
-    const members = new Set<string>();
-    for (const conn of set ?? []) {
-      if (conn.principal !== undefined) members.add(conn.principal.memberId);
-    }
-    return [...members];
-  }
-
   /**
    * Refresh the authority's live roster and broadcast any liveness changes to
    * the session (Phase 3; Req 3.1).
