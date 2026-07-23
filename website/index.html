@@ -829,8 +829,8 @@
           <p class="eyebrow">Install and try it</p>
           <h2>Choose the route that matches your role.</h2>
           <p>
-            Start with the local playground for a visual demo, or follow the
-            role-based team setup for a real shared repository.
+            Start with the local playground for a visual demo, or install a
+            client that joins the hosted CFLS relay with a device invitation.
           </p>
         </div>
 
@@ -862,8 +862,8 @@
               aria-controls="install-panel-host"
               data-install-tab="host"
             >
-              <span>02</span><b>I run the Host</b
-              ><small>Create a team and invite devices</small>
+              <span>02</span><b>I use the hosted relay</b
+              ><small>The shared WSS host is already online</small>
             </button>
             <button
               class="install-tab"
@@ -875,7 +875,7 @@
               data-install-tab="member"
             >
               <span>03</span><b>I am joining a team</b
-              ><small>Connect this laptop to the Host</small>
+              ><small>Install this laptop and start its Agent</small>
             </button>
             <button
               class="install-tab"
@@ -947,49 +947,43 @@
               data-install-panel="host"
               hidden
             >
-              <p class="panel-label">Admin path</p>
-              <h3>Create a team identity, then start the coordination Host.</h3>
+              <p class="panel-label">Hosted relay</p>
+              <h3>Use the live CFLS relay—no LAN or VPN setup.</h3>
               <p>
-                Run these commands inside the Git repository that your team
-                shares. The Host can begin on a laptop for a demo and move to an
-                always-on server later.
+                The demo relay is already available at
+                <code>wss://sync.cfls.cyberkunju.com</code> with a trusted TLS
+                certificate. Each device still needs a signed invitation from
+                the team admin before it may connect.
               </p>
               <div class="command-stack">
                 <div class="command">
-                  <code>.\cfls.exe admin-init --team my-team</code
+                  <code>cfls id</code
+                  ><button type="button" data-copy="cfls id">Copy</button>
+                </div>
+                <div class="command">
+                  <code>cfls join --team cyberkunju-cfls --name alice</code
                   ><button
                     type="button"
-                    data-copy=".\cfls.exe admin-init --team my-team"
+                    data-copy="cfls join --team cyberkunju-cfls --name alice"
                   >
                     Copy
                   </button>
                 </div>
                 <div class="command">
-                  <code>.\cfls.exe host --url wss://0.0.0.0:8730</code
+                  <code>cfls connect &lt;invitation&gt;</code
                   ><button
                     type="button"
-                    data-copy=".\cfls.exe host --url wss://0.0.0.0:8730"
-                  >
-                    Copy
-                  </button>
-                </div>
-                <div class="command">
-                  <code
-                    >.\cfls.exe invite alice
-                    &lt;alice-device-public-key&gt;</code
-                  ><button
-                    type="button"
-                    data-copy=".\cfls.exe invite alice &lt;alice-device-public-key&gt;"
+                    data-copy="cfls connect &lt;invitation&gt;"
                   >
                     Copy
                   </button>
                 </div>
               </div>
               <p class="panel-note">
-                <strong>Important:</strong> <code>0.0.0.0</code> is only the
-                listening address. Teammates join using this machine's reachable
-                LAN address or DNS name. Use a real TLS certificate for a
-                non-demo deployment.
+                <strong>Invitation required:</strong> send the public key from
+                <code>cfls id</code> to the team admin. The hosted relay address
+                is the default for <code>cfls join</code>, so no separate
+                network address needs to be typed.
               </p>
             </section>
 
@@ -1002,24 +996,26 @@
               data-install-panel="member"
               hidden
             >
-              <p class="panel-label">Teammate path</p>
+              <p class="panel-label">Windows and Linux client</p>
               <h3>
-                Register this laptop, receive an invitation, and start the local
-                Agent.
+                Install the client, redeem its invitation, and start the local
+                Agent automatically.
               </h3>
               <p>
-                Each teammate uses their own device key. This MVP expects the
-                same Git remote, branch, and base revision as the Host's
-                coordination session.
+                First use the downloaded client to run <code>id</code> and send
+                its public key to the team admin. The invitation is
+                device-specific; the installer then configures the hosted relay
+                and installs the background service for this repository.
               </p>
               <div class="command-stack">
                 <div class="command">
                   <code
-                    >.\cfls.exe join --host wss://HOST-IP:8730 --name alice
-                    --team my-team</code
+                    >Invoke-WebRequest
+                    https://cfls.cyberkunju.com/downloads/cfls.exe -OutFile
+                    .\cfls.exe</code
                   ><button
                     type="button"
-                    data-copy=".\cfls.exe join --host wss://HOST-IP:8730 --name alice --team my-team"
+                    data-copy="Invoke-WebRequest https://cfls.cyberkunju.com/downloads/cfls.exe -OutFile .\cfls.exe"
                   >
                     Copy
                   </button>
@@ -1029,28 +1025,69 @@
                   ><button type="button" data-copy=".\cfls.exe id">Copy</button>
                 </div>
                 <div class="command">
-                  <code>.\cfls.exe connect &lt;invitation&gt;</code
+                  <code
+                    >Invoke-WebRequest
+                    https://cfls.cyberkunju.com/downloads/install-windows.ps1
+                    -OutFile .\install-windows.ps1</code
                   ><button
                     type="button"
-                    data-copy=".\cfls.exe connect &lt;invitation&gt;"
+                    data-copy="Invoke-WebRequest https://cfls.cyberkunju.com/downloads/install-windows.ps1 -OutFile .\install-windows.ps1"
                   >
                     Copy
                   </button>
                 </div>
                 <div class="command">
-                  <code>.\cfls.exe agent --insecure-tls</code
+                  <code
+                    >powershell -ExecutionPolicy Bypass -File
+                    .\install-windows.ps1 -Workspace C:\work\repo -Name alice
+                    -Invite '&lt;invitation&gt;'</code
                   ><button
                     type="button"
-                    data-copy=".\cfls.exe agent --insecure-tls"
+                    data-copy="powershell -ExecutionPolicy Bypass -File .\install-windows.ps1 -Workspace C:\work\repo -Name alice -Invite '&lt;invitation&gt;'"
+                  >
+                    Copy
+                  </button>
+                </div>
+                <div class="command">
+                  <code
+                    >curl -fLO
+                    https://cfls.cyberkunju.com/downloads/cfls-linux-x64
+                    &amp;&amp; curl -fLO
+                    https://cfls.cyberkunju.com/downloads/install-linux.sh</code
+                  ><button
+                    type="button"
+                    data-copy="curl -fLO https://cfls.cyberkunju.com/downloads/cfls-linux-x64 &amp;&amp; curl -fLO https://cfls.cyberkunju.com/downloads/install-linux.sh"
+                  >
+                    Copy
+                  </button>
+                </div>
+                <div class="command">
+                  <code
+                    >chmod +x cfls-linux-x64 install-linux.sh &amp;&amp;
+                    ./cfls-linux-x64 id</code
+                  ><button
+                    type="button"
+                    data-copy="chmod +x cfls-linux-x64 install-linux.sh &amp;&amp; ./cfls-linux-x64 id"
+                  >
+                    Copy
+                  </button>
+                </div>
+                <div class="command">
+                  <code
+                    >./install-linux.sh --workspace /path/to/repo --name alice
+                    --invite '&lt;invitation&gt;'</code
+                  ><button
+                    type="button"
+                    data-copy="./install-linux.sh --workspace /path/to/repo --name alice --invite '&lt;invitation&gt;'"
                   >
                     Copy
                   </button>
                 </div>
               </div>
               <p class="panel-note">
-                <strong>Demo-only flag:</strong> <code>--insecure-tls</code> is
-                for a self-signed local Host. Do not use it for a production
-                Host with a valid certificate.
+                The hosted relay uses trusted TLS; do not add
+                <code>--insecure-tls</code>. The published demo client is Linux
+                x64; build the native ARM64 target from source when needed.
               </p>
             </section>
 
@@ -1076,31 +1113,38 @@
               <div class="command-stack">
                 <div class="command">
                   <code
-                    >code --install-extension
-                    release/cfls-coordination.vsix</code
+                    >code --install-extension ./cfls-coordination.vsix
+                    --force</code
                   ><button
                     type="button"
-                    data-copy="code --install-extension release/cfls-coordination.vsix"
+                    data-copy="code --install-extension ./cfls-coordination.vsix --force"
                   >
                     Copy
                   </button>
                 </div>
                 <div class="command">
                   <code
-                    >kiro --install-extension
-                    release/cfls-coordination.vsix</code
+                    >kiro --install-extension ./cfls-coordination.vsix
+                    --force</code
                   ><button
                     type="button"
-                    data-copy="kiro --install-extension release/cfls-coordination.vsix"
+                    data-copy="kiro --install-extension ./cfls-coordination.vsix --force"
                   >
                     Copy
                   </button>
                 </div>
               </div>
               <p class="panel-note">
-                Use <code>--force</code> only when you intentionally want to
-                replace an installed extension version. The extension's current
-                MVP UI is a clickable CFLS status item and active-team panel.
+                Download
+                <a href="/downloads/cfls-coordination.vsix"
+                  >cfls-coordination.vsix</a
+                >
+                first. The clickable CFLS status item opens the active-team
+                view; its local diff preview never sends source patches to
+                teammates. Hosted coding agents can use the read-only MCP
+                endpoint at
+                <code>https://sync.cfls.cyberkunju.com/mcp</code> with a bearer
+                token issued by the team admin.
               </p>
             </section>
 
@@ -1114,7 +1158,7 @@
               hidden
             >
               <p class="panel-label">Source build</p>
-              <h3>Build the monorepo and package the Windows CLI yourself.</h3>
+              <h3>Build the monorepo and package the Windows or Linux CLI.</h3>
               <p>
                 This is the route for contributors or teams that want to make
                 their own internal build. It requires Node.js and pnpm.
@@ -1138,6 +1182,15 @@
                   </button>
                 </div>
                 <div class="command">
+                  <code>pnpm -C apps/cli package:linux</code
+                  ><button
+                    type="button"
+                    data-copy="pnpm -C apps/cli package:linux"
+                  >
+                    Copy
+                  </button>
+                </div>
+                <div class="command">
                   <code>pnpm -C apps/vscode-extension package:vsix</code
                   ><button
                     type="button"
@@ -1148,15 +1201,29 @@
                 </div>
               </div>
               <p class="panel-note">
-                The built executable is intended for a GitHub Release or
-                internal distribution; it is not automatically included in this
-                static website.
+                Published demo builds are available below. Build locally only
+                when you need a custom internal distribution.
               </p>
             </section>
           </div>
         </div>
 
         <div class="install-links" data-reveal>
+          <a href="/downloads/cfls.exe"
+            >Download Windows client <span>arrow</span></a
+          >
+          <a href="/downloads/install-windows.ps1"
+            >Download Windows installer <span>arrow</span></a
+          >
+          <a href="/downloads/cfls-linux-x64"
+            >Download Linux x64 client <span>arrow</span></a
+          >
+          <a href="/downloads/install-linux.sh"
+            >Download Linux installer <span>arrow</span></a
+          >
+          <a href="/downloads/cfls-coordination.vsix"
+            >Download editor extension <span>arrow</span></a
+          >
           <a
             href="https://github.com/greninja-op/CFLS-Collaborative-File-Lock-Sync/blob/main/release/README.md"
             target="_blank"

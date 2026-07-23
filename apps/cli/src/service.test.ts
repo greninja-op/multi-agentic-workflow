@@ -16,6 +16,7 @@ import {
   getServiceStatus,
   parseLinuxUserServiceStatus,
   parseWindowsUserTaskStatus,
+  escapeSystemdPath,
   quoteSystemdArgument,
   quoteWindowsArgument,
   type ServiceCommand,
@@ -138,7 +139,7 @@ describe("Linux systemd --user plans", () => {
       'ExecStart="/opt/CFLS/cfls agent" "agent" "--team" "north$$star%%"',
     );
     expect(plan.filesToWrite[0]?.content).toContain(
-      'WorkingDirectory="/work/team alpha"',
+      "WorkingDirectory=/work/team\\x20alpha",
     );
     expect(plan.commands).toEqual([
       {
@@ -156,6 +157,13 @@ describe("Linux systemd --user plans", () => {
 
   it("escapes systemd interpolation characters as literals", () => {
     expect(quoteSystemdArgument('a\\b"c$d%e')).toBe('"a\\\\b\\"c$$d%%e"');
+  });
+
+  it("renders WorkingDirectory paths without invalid quote characters", () => {
+    expect(escapeSystemdPath("/work/team alpha/%quoted")).toBe(
+      "/work/team\\x20alpha/%%quoted",
+    );
+    expect(() => escapeSystemdPath("relative/path")).toThrow(/absolute/);
   });
 
   it("uses an idempotent stop/remove/reload plan for uninstall", () => {
@@ -194,6 +202,10 @@ describe("Windows Task Scheduler plans", () => {
     expect(plan.filesToWrite[0]?.path).toBe(
       "C:\\Users\\Alice\\AppData\\Local\\CFLS\\services\\cfls-agent.xml",
     );
+    expect(plan.filesToWrite[0]?.encoding).toBe("utf16le-bom");
+    expect(plan.filesToWrite[0]?.content).toContain(
+      '<?xml version="1.0" encoding="UTF-16"?>',
+    );
     expect(plan.filesToWrite[0]?.content).toContain(
       "<LogonType>InteractiveToken</LogonType>",
     );
@@ -222,7 +234,7 @@ describe("Windows Task Scheduler plans", () => {
         args: [
           "/Create",
           "/TN",
-          "\\CFLS\\cfls-agent",
+          "\\CFLS-cfls-agent",
           "/XML",
           "C:\\Users\\Alice\\AppData\\Local\\CFLS\\services\\cfls-agent.xml",
           "/F",
@@ -231,7 +243,7 @@ describe("Windows Task Scheduler plans", () => {
       {
         id: "task-start",
         executable: "schtasks.exe",
-        args: ["/Run", "/TN", "\\CFLS\\cfls-agent"],
+        args: ["/Run", "/TN", "\\CFLS-cfls-agent"],
       },
     ]);
   });
@@ -269,11 +281,11 @@ describe("Windows Task Scheduler plans", () => {
       serviceName: "demo-agent",
     });
     expect(uninstall.commands[0]).toMatchObject({
-      args: ["/End", "/TN", "\\CFLS\\demo-agent"],
+      args: ["/End", "/TN", "\\CFLS-demo-agent"],
       allowMissingService: true,
     });
     expect(uninstall.commands[1]).toMatchObject({
-      args: ["/Delete", "/TN", "\\CFLS\\demo-agent", "/F"],
+      args: ["/Delete", "/TN", "\\CFLS-demo-agent", "/F"],
       allowMissingService: true,
     });
   });
@@ -474,8 +486,8 @@ describe("executor-backed lifecycle", () => {
     expect(result).toMatchObject({ ok: true });
     expect(result.warnings).toHaveLength(2);
     expect(calls).toEqual([
-      "run:schtasks.exe /End /TN \\CFLS\\cfls-agent",
-      "run:schtasks.exe /Delete /TN \\CFLS\\cfls-agent /F",
+      "run:schtasks.exe /End /TN \\CFLS-cfls-agent",
+      "run:schtasks.exe /Delete /TN \\CFLS-cfls-agent /F",
       "remove:C:\\Users\\Alice\\AppData\\Local\\CFLS\\services\\cfls-agent.xml",
     ]);
   });

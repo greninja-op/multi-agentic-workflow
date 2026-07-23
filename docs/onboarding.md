@@ -41,8 +41,10 @@ errors clearly if neither source exists.
 
 ## Prerequisites
 
-- Node.js ≥ 20 and the built CLI (`pnpm -r build`, then use `cfls` from
-  `apps/cli/dist/index.js`, or `pnpm --filter @cfls/cli exec cfls …`).
+- Node.js ≥ 20, dependencies installed with `pnpm install --frozen-lockfile`,
+  and the built CLI (`pnpm -r build`). From a source checkout, run
+  `node apps/cli/dist/index.js <command>` from the repository root. The
+  shorthand `cfls <command>` below means an installed standalone CLI.
 - Everyone has cloned the **same git remote** and checked out the **same branch**.
 - The admin's host must be reachable from each teammate (see
   [deployment.md](./deployment.md) for laptop vs VPS reachability).

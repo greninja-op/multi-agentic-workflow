@@ -12,7 +12,9 @@
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run",
     "test:watch": "vitest",
-    "package:win": "node scripts/build-exe.mjs"
+    "package:standalone": "node scripts/build-exe.mjs",
+    "package:linux": "node scripts/build-exe.mjs --target linux",
+    "package:win": "node scripts/build-exe.mjs --target win-x64"
   },
   "dependencies": {
     "@cfls/agent": "workspace:*",

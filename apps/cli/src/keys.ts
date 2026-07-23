@@ -13,9 +13,12 @@
  * Both scopes fail closed when no secure backend is available (Req 5.9).
  */
 
+import { createHash } from "node:crypto";
+
 import { loadOrCreateDeviceKey } from "@cfls/agent";
 import {
   createSecretStore,
+  DEVICE_PRIVATE_KEY_SECRET,
   generateDeviceKey,
   SecureStorageUnavailableError,
   type DeviceKey,
@@ -23,6 +26,17 @@ import {
 
 /** Secret name under which the Team_Admin key pair is stored. */
 export const ADMIN_KEY_SECRET = "admin-device-key";
+
+/**
+ * Derive a bounded, opaque secret-store name for one repository identity.
+ * The encrypted-file fallback stores each secret name in a separate file; a
+ * single generic name therefore cannot safely serve several repositories with
+ * different encryption entropy.
+ */
+export function deviceKeySecretName(repoId: string): string {
+  const scope = createHash("sha256").update(repoId, "utf8").digest("hex");
+  return `device-private-key-${scope}`;
+}
 
 /** True when `value` is a well-formed {@link DeviceKey}. */
 function isDeviceKey(value: unknown): value is DeviceKey {
@@ -85,5 +99,43 @@ export async function loadOrCreateThisDeviceKey(
   repoId: string,
 ): Promise<DeviceKey> {
   const store = createSecretStore({ appSecret: repoId });
-  return loadOrCreateDeviceKey(store);
+  const scopedName = deviceKeySecretName(repoId);
+
+  // Prefer the scoped record. It prevents an encrypted fallback record from a
+  // different repository from being decrypted with this repository's entropy.
+  let scoped: string | null = null;
+  try {
+    scoped = await store.get(scopedName);
+  } catch {
+    // A damaged scoped fallback record is regenerated below.
+  }
+  if (scoped !== null) {
+    try {
+      const parsed: unknown = JSON.parse(scoped);
+      if (isDeviceKey(parsed)) {
+        return { publicKey: parsed.publicKey, privateKey: parsed.privateKey };
+      }
+    } catch {
+      // Delegate a malformed scoped record to the established regeneration path.
+    }
+  }
+
+  // Migrate a readable legacy generic record so existing enrolled devices keep
+  // their identity. A generic encrypted-file record from another repository
+  // cannot authenticate under this repo's entropy; ignore it and make a clean
+  // scoped identity instead.
+  try {
+    const legacy = await store.get(DEVICE_PRIVATE_KEY_SECRET);
+    if (legacy !== null) {
+      const parsed: unknown = JSON.parse(legacy);
+      if (isDeviceKey(parsed)) {
+        await store.set(scopedName, legacy);
+        return { publicKey: parsed.publicKey, privateKey: parsed.privateKey };
+      }
+    }
+  } catch {
+    // Foreign or unreadable legacy fallback records must not prevent first use.
+  }
+
+  return loadOrCreateDeviceKey(store, scopedName);
 }

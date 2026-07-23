@@ -87,6 +87,8 @@ export interface ServiceFileWrite {
   readonly path: string;
   readonly content: string;
   readonly mode?: number;
+  /** Task Scheduler's XML importer requires UTF-16LE with a BOM on Windows. */
+  readonly encoding?: "utf8" | "utf16le-bom";
 }
 
 /** A file that an uninstall plan needs the executor to remove. */
@@ -132,7 +134,7 @@ export interface ServicePaths {
   readonly definitionDirectory: string;
   /** Full path to the persisted systemd unit or task XML definition. */
   readonly definitionPath: string;
-  /** `cfls-agent.service` on Linux, `\\CFLS\\cfls-agent` on Windows. */
+  /** `cfls-agent.service` on Linux, `\\CFLS-cfls-agent` on Windows. */
   readonly platformServiceId: string;
 }
 
@@ -335,7 +337,9 @@ export function resolveServicePaths(
       definitionDirectory,
       `${validated.serviceName}.xml`,
     ),
-    platformServiceId: `\\CFLS\\${validated.serviceName}`,
+    // A custom Task Scheduler folder may not exist for ordinary user accounts.
+    // A root-level CFLS-prefixed task has no hidden folder prerequisite.
+    platformServiceId: `\\CFLS-${validated.serviceName}`,
   };
 }
 
@@ -352,6 +356,28 @@ export function quoteSystemdArgument(value: string): string {
     .replace(/\$/gu, () => "$$")
     .replace(/%/gu, "%%");
   return `"${escaped}"`;
+}
+
+/**
+ * Escape a path-valued systemd directive without surrounding quotes.
+ *
+ * `ExecStart=` accepts shell-like quoted argv elements, but path directives
+ * such as `WorkingDirectory=` do not: quote characters become part of the
+ * value and systemd rejects the path as non-absolute. Use systemd's C-style
+ * escapes for the few characters that need protection instead.
+ */
+export function escapeSystemdPath(value: string): string {
+  const path = requireSafeText(value, "systemd path");
+  if (!posix.isAbsolute(path)) {
+    throw new ServiceValidationError(
+      "systemd path must be an absolute POSIX path.",
+    );
+  }
+  return path
+    .replace(/\\/gu, "\\\\")
+    .replace(/ /gu, "\\x20")
+    .replace(/"/gu, "\\x22")
+    .replace(/%/gu, "%%");
 }
 
 /**
@@ -437,7 +463,7 @@ export function buildLinuxUserServiceUnit(
     "",
     "[Service]",
     "Type=simple",
-    `WorkingDirectory=${quoteSystemdArgument(validated.workspacePath)}`,
+    `WorkingDirectory=${escapeSystemdPath(validated.workspacePath)}`,
     `ExecStart=${execStart}`,
     "Restart=on-failure",
     "RestartSec=3",
@@ -465,7 +491,7 @@ export function buildWindowsUserTaskXml(
   const argumentsText = validated.args.map(quoteWindowsArgument).join(" ");
 
   return [
-    '<?xml version="1.0" encoding="UTF-8"?>',
+    '<?xml version="1.0" encoding="UTF-16"?>',
     '<Task version="1.3" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">',
     "  <RegistrationInfo>",
     `    <URI>${escapeTaskXml(paths.platformServiceId)}</URI>`,
@@ -578,6 +604,7 @@ export function buildServiceInstallPlan(
       {
         path: paths.definitionPath,
         content: buildWindowsUserTaskXml(validated),
+        encoding: "utf16le-bom",
       },
     ],
     filesToRemove: [],

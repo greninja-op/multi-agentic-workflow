@@ -240,12 +240,15 @@ For the full multi-laptop guide, see [team onboarding](./docs/onboarding.md). Th
 
 ### 1. An admin creates the team identity and starts the Host
 
-Run these from the shared repository after building the workspace:
+Run these from the shared repository after installing dependencies and building
+the workspace. In a source checkout, invoke the CLI with
+`node apps/cli/dist/index.js` (there is no globally installed `cfls` binary).
 
 ```bash
+pnpm install --frozen-lockfile
 pnpm -r build
-pnpm --filter @cfls/cli exec cfls admin-init --team my-team
-pnpm --filter @cfls/cli exec cfls host --url wss://0.0.0.0:8730 --db ./cfls-host.db
+node apps/cli/dist/index.js admin-init --team my-team
+node apps/cli/dist/index.js host --url wss://0.0.0.0:8730 --db ./cfls-host.db
 ```
 
 Without `--cert` and `--key`, the Host uses a development self-signed certificate. That is suitable only for a controlled demo or local development; Agents connecting to it need `--insecure-tls`.
@@ -255,21 +258,24 @@ Without `--cert` and `--key`, the Host uses a development self-signed certificat
 From the same Git repository on that teammate's computer:
 
 ```bash
-pnpm --filter @cfls/cli exec cfls join --host wss://HOST-IP:8730 --name alice --team my-team
-pnpm --filter @cfls/cli exec cfls id
+node apps/cli/dist/index.js join --host wss://sync.cfls.cyberkunju.com --name alice --team cyberkunju-cfls
+node apps/cli/dist/index.js id
 ```
 
 Send the displayed public key to the admin. The admin issues a signed invitation:
 
 ```bash
-pnpm --filter @cfls/cli exec cfls invite alice <alice-device-public-key>
+# On the deployed Host, issue the invitation on reticule, where the authorized
+# host-admin identity is stored:
+PUBLIC_KEY='<alice-device-public-key>'
+ssh reticule "sh /opt/cfls/deploy/host/admin.sh invite alice '$PUBLIC_KEY'"
 ```
 
 ### 3. The teammate connects their local Agent
 
 ```bash
-pnpm --filter @cfls/cli exec cfls connect <invitation>
-pnpm --filter @cfls/cli exec cfls agent --insecure-tls
+node apps/cli/dist/index.js connect <invitation>
+node apps/cli/dist/index.js agent
 ```
 
 Every teammate must coordinate the same Git remote, branch, and base revision. For production, use a reachable DNS name or stable address, a real certificate via `cfls host --cert <pem> --key <pem>`, durable storage, and omit `--insecure-tls`.
@@ -281,20 +287,22 @@ to source content beyond the authorized folder watcher, and it shares only coord
 
 ```bash
 # Linux: installs and starts a per-user systemd unit
-pnpm --filter @cfls/cli exec cfls service install --workspace /absolute/repo/path
+node apps/cli/dist/index.js service install --workspace /absolute/repo/path
 
 # Windows: creates a per-user Task Scheduler task; identify the task principal explicitly
-pnpm --filter @cfls/cli exec cfls service install --workspace C:\path\to\repo \
+node apps/cli/dist/index.js service install --workspace C:\path\to\repo \
   --windows-user 'DOMAIN\User-or-SID'
 
 # Either platform
-pnpm --filter @cfls/cli exec cfls service status --workspace /absolute/repo/path
-pnpm --filter @cfls/cli exec cfls service uninstall --workspace /absolute/repo/path
+node apps/cli/dist/index.js service status --workspace /absolute/repo/path
+node apps/cli/dist/index.js service uninstall --workspace /absolute/repo/path
 ```
 
-For a development Host using a self-signed certificate, add `--insecure-tls` to the install
-command. Linux users who need the Agent to survive logout may also need to enable lingering for
-their account with their system administrator's policy.
+The deployed `sync.cfls.cyberkunju.com` Host has a trusted certificate, so do
+not add `--insecure-tls`. For a development Host using a self-signed
+certificate, add it to the install command. Linux users who need the Agent to
+survive logout may also need to enable lingering for their account with their
+system administrator's policy.
 
 ### Install the editor extension
 
@@ -332,17 +340,34 @@ outer configuration key varies by client; the process definition is:
 
 ```json
 {
-  "command": "cfls",
-  "args": ["mcp", "--workspace", "/absolute/repo/path"]
+  "command": "node",
+  "args": [
+    "/absolute/repo/path/apps/cli/dist/index.js",
+    "mcp",
+    "--workspace",
+    "/absolute/repo/path"
+  ]
 }
 ```
 
 Every MCP result carries connection and staleness information. `get_team_status` returns active
 members, their declared task descriptions, and repository-relative file/activity metadata. The
 VS Code/Kiro status item opens the same kind of active-team view: select a member to inspect the
-tasks and files currently attributed to them. Neither surface transmits source text, file
-patches, or diffs. A member's own active work is excluded from that member's Risk Map so the
+tasks and files currently attributed to them. Selecting your own active file can show a bounded
+local saved-versus-unsaved preview; neither surface transmits source text, file patches, or
+diffs. A member's own active work is excluded from that member's Risk Map so the
 result focuses on possible conflicts with others. See the [protocol's MCP tool surface](./docs/protocol.md#mcp-tool-surface) for schemas and responses.
+
+### Optional hosted read-only MCP
+
+The deployed relay can also expose a bearer-authenticated Streamable HTTP MCP
+endpoint at `https://sync.cfls.cyberkunju.com/mcp`. It is explicitly scoped to
+one Repository_Session and can only read team, connection, risk, and dependency
+metadata. It cannot impersonate a device or create/change intents and locks.
+Ask the team admin for the bearer token and configure the remote client with an
+`Authorization: Bearer <token>` header. The hosted Risk Map is advisory because
+repository protection rules remain client-local; use the enrolled local
+`cfls mcp` bridge for authoritative mutations and policy enforcement.
 
 ## Security, privacy, and offline behavior
 
@@ -407,9 +432,16 @@ pnpm -C apps/vscode-extension package:vsix
 
 # Build the Windows CLI executable
 pnpm -C apps/cli package:win
+
+# Build the Linux x64 CLI executable (run natively on ARM64 for that target)
+pnpm -C apps/cli package:linux
 ```
 
-The VSIX is written to `apps/vscode-extension/vsix-pkg/cfls-coordination.vsix`. The Windows executable is written to `apps/cli/dist-exe/cfls.exe`; large executables should be shipped through a GitHub Release or an internal distribution channel rather than committed to Git history.
+The VSIX is written to `apps/vscode-extension/vsix-pkg/cfls-coordination.vsix`.
+The standalone client is written to `apps/cli/dist-exe/`; build targets one at
+a time because each packaging run cleans that directory. Large executables
+should be shipped through a GitHub Release or an internal distribution channel
+rather than committed to Git history.
 
 ### Repository map
 

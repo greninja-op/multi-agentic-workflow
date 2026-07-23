@@ -1,88 +1,127 @@
-# CFLS release artifacts
+# CFLS demo downloads
 
-This folder holds the two distributable artifacts. Both are **built and verified
-working**; see how to (re)build each below.
+The hosted CFLS relay is ready at `wss://sync.cfls.cyberkunju.com`. The
+standalone clients and installers below use it by default, so teammates do not
+need to be on the same LAN or configure a VPN.
 
-| Artifact                 | Size   | In git?          | What it is                                                                                                   |
-| ------------------------ | ------ | ---------------- | ------------------------------------------------------------------------------------------------------------ |
-| `cfls-coordination.vsix` | ~80 KB | ✅ committed     | The VS Code / Kiro editor extension, including the live metadata-only CFLS team panel.                       |
-| `cfls.exe`               | ~89 MB | ❌ not committed | The standalone `cfls` CLI as a single Windows executable (Node runtime baked in). Runs with no Node install. |
+An invitation is still required for every device. It is the authorization that
+lets the relay verify who may read and publish coordination metadata; the
+installer deliberately does not bypass it.
 
-> **Why `cfls.exe` is not committed:** it's an 89 MB binary. Committing it would
-> bloat the git history permanently (every clone would download it forever, even
-> after deletion). It is trivial to rebuild (one command, below), and the proper
-> home for a large binary is a **GitHub Release asset** (free). Ask if you want it
-> published as a Release.
+## Downloads
 
----
+| Download                 | Direct link                                                                            | Use                                                                         |
+| ------------------------ | -------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| Windows client           | [cfls.exe](https://cfls.cyberkunju.com/downloads/cfls.exe)                             | Standalone Windows CLI; no Node.js install needed.                          |
+| Windows installer        | [install-windows.ps1](https://cfls.cyberkunju.com/downloads/install-windows.ps1)       | Installs the CLI for the current user and creates the Agent task.           |
+| Linux x64 client         | [cfls-linux-x64](https://cfls.cyberkunju.com/downloads/cfls-linux-x64)                 | Standalone Linux x86_64 CLI.                                                |
+| Linux installer          | [install-linux.sh](https://cfls.cyberkunju.com/downloads/install-linux.sh)             | Installs the CLI for the current user and creates the systemd user service. |
+| VS Code / Kiro extension | [cfls-coordination.vsix](https://cfls.cyberkunju.com/downloads/cfls-coordination.vsix) | Clickable CFLS status item, team panel, and local diff preview.             |
 
-## The extension — `cfls-coordination.vsix`
+## Connect a Windows laptop
 
-**Install it** (into VS Code and/or Kiro):
+1. Download `cfls.exe`, then get this device's public key and send it to the
+   team admin:
 
-```
-code --install-extension release/cfls-coordination.vsix --force
-kiro --install-extension release/cfls-coordination.vsix --force
-```
+   ```powershell
+   Invoke-WebRequest https://cfls.cyberkunju.com/downloads/cfls.exe -OutFile .\cfls.exe
+   .\cfls.exe id
+   ```
 
-That's all a teammate needs — no marketplace, no publishing. Just send them this
-`.vsix` file and the command above.
+2. After the admin returns a signed invitation, download and run the installer
+   from the checked-out repository:
 
-**Rebuild it** after changing the extension source:
+   ```powershell
+   Invoke-WebRequest https://cfls.cyberkunju.com/downloads/install-windows.ps1 -OutFile .\install-windows.ps1
+   powershell -ExecutionPolicy Bypass -File .\install-windows.ps1 `
+     -Workspace C:\work\your-repository -Name alice -Invite '<invitation>'
+   ```
 
-```
-pnpm -C apps/vscode-extension package:vsix
-# → apps/vscode-extension/vsix-pkg/cfls-coordination.vsix
-```
+The installer saves `wss://sync.cfls.cyberkunju.com`, redeems the invitation,
+and creates a per-user Task Scheduler Agent. It does not require Node.js.
 
-Then copy it here:
+## Connect a Linux laptop
+
+1. Download the Linux x64 binary, make it executable, and send its public key
+   to the team admin. (For ARM64, build the documented native target from
+   source until a signed ARM64 release asset is published.)
+
+   ```bash
+   curl -fLO https://cfls.cyberkunju.com/downloads/cfls-linux-x64
+   curl -fLO https://cfls.cyberkunju.com/downloads/install-linux.sh
+   chmod +x cfls-linux-x64 install-linux.sh
+   ./cfls-linux-x64 id
+   ```
+
+2. After receiving the signed invitation, install and start the background
+   Agent for the repository:
+
+   ```bash
+   ./install-linux.sh \
+     --workspace /absolute/path/to/your-repository \
+     --name alice \
+     --invite '<invitation>'
+   ```
+
+The installer saves the hosted relay, installs `cfls` in `~/.local/bin`, and
+creates a per-user systemd service. It will not start an Agent without an
+invitation. If your system policy stops user services after logout, enable user
+lingering through the system administrator.
+
+## Install the editor extension
+
+Download the VSIX, then install it in VS Code or Kiro:
 
 ```bash
-cp apps/vscode-extension/vsix-pkg/cfls-coordination.vsix release/
-# PowerShell: Copy-Item apps/vscode-extension/vsix-pkg/cfls-coordination.vsix release/
+code --install-extension ./cfls-coordination.vsix --force
+kiro --install-extension ./cfls-coordination.vsix --force
 ```
 
-**Verified:** the committed archive packages cleanly as a seven-file,
-self-contained bundle and includes the current team-panel implementation. Install
-it with the commands above in the editor you use.
+With the local Agent running, the status bar shows the CFLS mark, team, and
+connection state. Click it to open the active-team panel. Selecting your own
+active file can show a compact local saved-versus-unsaved diff; teammate source
+and patches are never transmitted or displayed.
 
----
+## Hosted read-only MCP
 
-## The CLI — `cfls.exe`
+The hosted Streamable HTTP MCP endpoint is:
 
-A single Windows executable exposing every `cfls` command
-(`admin-init` / `host` / `id` / `invite` / `join` / `connect` / `agent` /
-`mcp` / `service` / `sync` / `clone`). No Node install required on the target
-machine.
-
-**Build it:**
-
+```text
+https://sync.cfls.cyberkunju.com/mcp
 ```
+
+It is bearer-authenticated and read-only. It exposes the authorized session's
+team status, connection status, risk map, and dependency metadata; it cannot
+impersonate a device or create locks and intents. Ask the team admin for a
+hosted MCP bearer token, then add this shape to the remote-MCP configuration of
+your client:
+
+```json
+{
+  "url": "https://sync.cfls.cyberkunju.com/mcp",
+  "headers": {
+    "Authorization": "Bearer <hosted-mcp-token>"
+  }
+}
+```
+
+For device-authenticated intent and lock changes, use the local stdio bridge
+(`cfls mcp`) from an enrolled laptop instead.
+
+The hosted risk map is advisory: repository protection rules remain on enrolled
+clients, so only the local bridge can enforce those rules for a mutation.
+
+## Rebuilding artifacts
+
+The source commands below produce the same artifact families when a custom
+internal build is needed:
+
+```bash
+pnpm -C apps/vscode-extension package:vsix
 pnpm -C apps/cli package:win
-# → apps/cli/dist-exe/cfls.exe   (then copy to release/ if you want)
+pnpm -C apps/cli package:linux
 ```
 
-**Use it** (examples):
-
-```
-cfls.exe help
-cfls.exe id
-cfls.exe admin-init --team myteam
-cfls.exe host --url wss://0.0.0.0:8730
-cfls.exe agent --insecure-tls
-```
-
-**Verified working:** `help`, `id` (device key + secret store), `admin-init`
-(secret store write), and `host` (opens SQLite via `node:sqlite` and binds the
-`wss://` TLS server) all run correctly from the packaged exe.
-
-**How it's built:** Node's Single Executable Applications (SEA) feature — a
-single self-contained CommonJS bundle (`tsup.exe.config.ts`) is embedded into a
-copy of the Node binary via `postject` (`apps/cli/scripts/build-exe.mjs`). The
-build defines `import.meta.url` to a valid file URL so `createRequire(...)`-based
-Node built-in loading (e.g. `node:sqlite`) keeps working inside the CJS bundle.
-
-> Windows note: the packaged exe carries an invalidated Node code signature, so
-> SmartScreen/Defender may prompt on first run of an unsigned internal build.
-> That's expected for an unsigned executable; code-signing is a separate,
-> optional release step.
+The Windows build is an unsigned internal executable, so Windows SmartScreen or
+Defender may request confirmation on first launch. Code signing is a separate
+release process.

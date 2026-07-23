@@ -2,7 +2,7 @@
   "name": "@cfls/vscode-extension",
   "displayName": "CFLS Collaborative File Lock Sync",
   "description": "VS Code Editor_Extension that talks only to the local CoordinationAgent: emits editor events, renders coordination state, and opens a metadata-only team status panel.",
-  "version": "0.1.0",
+  "version": "0.1.8",
   "license": "MIT",
   "private": true,
   "publisher": "greninja-op",
@@ -30,6 +30,10 @@
       {
         "command": "cfls.reconnectLocalAgent",
         "title": "CFLS: Reconnect to Local Coordination Agent"
+      },
+      {
+        "command": "cfls.setupDemo",
+        "title": "CFLS: Set Up This Workspace (Demo Pairing)"
       }
     ],
     "configuration": {
@@ -39,6 +43,11 @@
           "type": "string",
           "default": "ws://127.0.0.1:8750",
           "description": "Loopback WebSocket URL of the local CoordinationAgent Local_API. The extension never connects to the CoordinationHost directly."
+        },
+        "cfls.clientPath": {
+          "type": "string",
+          "default": "",
+          "description": "Optional absolute path to the installed CFLS client. Leave blank to use the standard installer location."
         },
         "cfls.localApi.token": {
           "type": "string",
@@ -58,7 +67,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run",
     "test:watch": "vitest",
-    "build:vsix": "tsup --config tsup.vsix.config.ts && node -e \"const fs=require('node:fs');fs.mkdirSync('vsix-pkg/dist',{recursive:true});fs.copyFileSync('dist/index.js','vsix-pkg/dist/index.js');fs.copyFileSync('icon.png','vsix-pkg/icon.png');fs.copyFileSync('../../LICENSE','vsix-pkg/LICENSE')\"",
+    "build:vsix": "tsup --config tsup.vsix.config.ts && node -e \"const fs=require('node:fs');fs.mkdirSync('vsix-pkg/dist',{recursive:true});fs.copyFileSync('dist/index.js','vsix-pkg/dist/index.js');fs.cpSync('media','vsix-pkg/media',{recursive:true});fs.copyFileSync('icon.png','vsix-pkg/icon.png');fs.copyFileSync('../../LICENSE','vsix-pkg/LICENSE')\"",
     "package:vsix": "pnpm run build:vsix && cd vsix-pkg && vsce package --no-dependencies --allow-missing-repository -o cfls-coordination.vsix"
   },
   "dependencies": {

@@ -9,6 +9,7 @@ export default tseslint.config(
     // Never lint build output, deps, or the VS Code extension bundle.
     ignores: [
       "**/dist/**",
+      "apps/cli/dist-exe/**",
       "**/node_modules/**",
       "**/*.tsbuildinfo",
       "coverage/**",

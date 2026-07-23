@@ -7,7 +7,7 @@
 
 import { mkdtempSync, rmSync } from "node:fs";
 import type { IncomingHttpHeaders } from "node:http";
-import { get } from "node:https";
+import { get, request } from "node:https";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -84,6 +84,46 @@ function getHttp(path: string): Promise<HttpResponse> {
       },
     );
     request.once("error", reject);
+  });
+}
+
+function postHttp(
+  path: string,
+  payload: unknown,
+  headers: Record<string, string> = {},
+): Promise<HttpResponse> {
+  return new Promise((resolve, reject) => {
+    const body = JSON.stringify(payload);
+    const outbound = request(
+      {
+        hostname: "127.0.0.1",
+        port: host.port,
+        path,
+        method: "POST",
+        rejectUnauthorized: false,
+        headers: {
+          "content-type": "application/json",
+          "content-length": String(Buffer.byteLength(body)),
+          ...headers,
+        },
+      },
+      (response) => {
+        let responseBody = "";
+        response.setEncoding("utf8");
+        response.on("data", (chunk: string) => {
+          responseBody += chunk;
+        });
+        response.once("end", () => {
+          resolve({
+            statusCode: response.statusCode,
+            headers: response.headers,
+            body: responseBody,
+          });
+        });
+      },
+    );
+    outbound.once("error", reject);
+    outbound.end(body);
   });
 }
 
@@ -269,6 +309,144 @@ describe("dashboard HTTP", () => {
     expect(JSON.parse(health.body)).toMatchObject({ status: "ok" });
     expect(diagnostics.statusCode).toBe(200);
     expect(JSON.parse(diagnostics.body)).toMatchObject({ status: "ok" });
+  });
+});
+
+describe("demo short-code pairing", () => {
+  it("mints ordinary device-bound invitations and consumes each join code once", async () => {
+    await host.stop();
+    host = await startFreshHost({
+      demoPairing: {
+        session,
+        issuerPublicKey: admin.key.publicKey,
+        issuerPrivateKey: admin.key.privateKey,
+      },
+    });
+    host.authority.registerSession(session, [admin.key.publicKey]);
+    const workspaceSession = makeSession({
+      repoId: "github.com/acme/idea",
+      branch: "demo-work",
+      baseRevision: "workspace-revision",
+    });
+
+    const first = makeDevice("alice");
+    const issued = await postHttp("/demo-pair/host", {
+      devicePublicKey: first.key.publicKey,
+      memberId: first.memberId,
+      session: workspaceSession,
+    });
+    expect(issued.statusCode).toBe(201);
+    const hosted = JSON.parse(issued.body) as {
+      code: string;
+      invitation: unknown;
+    };
+    expect(hosted.code).toMatch(/^\d{8}$/u);
+    expect(
+      (hosted.invitation as { claims: { session: SessionId } }).claims.session,
+    ).toEqual(workspaceSession);
+
+    const second = makeDevice("bob");
+    const joined = await postHttp("/demo-pair/join", {
+      code: hosted.code,
+      devicePublicKey: second.key.publicKey,
+      memberId: second.memberId,
+    });
+    expect(joined.statusCode).toBe(201);
+    const joinedInvitation = Buffer.from(
+      JSON.stringify(
+        (JSON.parse(joined.body) as { invitation: unknown }).invitation,
+      ),
+      "utf8",
+    ).toString("base64");
+    const client = await TestClient.open(url());
+    expect(
+      await client.handshake(workspaceSession, second, joinedInvitation),
+    ).toEqual({ ok: true });
+    client.close();
+
+    const replay = await postHttp("/demo-pair/join", {
+      code: hosted.code,
+      devicePublicKey: makeDevice("mallory").key.publicKey,
+      memberId: "mallory",
+    });
+    expect(replay.statusCode).toBe(404);
+  });
+});
+
+describe("hosted read-only MCP", () => {
+  const mcpToken = "cfls-hosted-mcp-test-token-0123456789";
+  const initialize = {
+    jsonrpc: "2.0",
+    id: 1,
+    method: "initialize",
+    params: {
+      protocolVersion: "2025-03-26",
+      capabilities: {},
+      clientInfo: { name: "cfls-host-test", version: "1.0.0" },
+    },
+  };
+
+  async function startMcpHost(): Promise<void> {
+    await host.stop();
+    host = await startFreshHost({
+      remoteMcp: {
+        token: mcpToken,
+        session,
+        publicHostUrl: "wss://sync.example.test",
+      },
+    });
+    host.authority.registerSession(session, [admin.key.publicKey]);
+  }
+
+  it("requires a bearer token before MCP initialization", async () => {
+    await startMcpHost();
+    const response = await postHttp("/mcp", initialize);
+    expect(response.statusCode).toBe(401);
+    expect(response.headers["www-authenticate"]).toContain("Bearer");
+    expect(JSON.parse(response.body)).toEqual({ error: "unauthorized" });
+  });
+
+  it("serves only the scoped metadata session over a stateful MCP handshake", async () => {
+    await startMcpHost();
+    const initialized = await postHttp("/mcp", initialize, {
+      authorization: `Bearer ${mcpToken}`,
+      accept: "application/json, text/event-stream",
+    });
+    expect(initialized.statusCode).toBe(200);
+    const mcpSessionId = initialized.headers["mcp-session-id"];
+    expect(typeof mcpSessionId).toBe("string");
+
+    const response = await postHttp(
+      "/mcp",
+      {
+        jsonrpc: "2.0",
+        id: 2,
+        method: "tools/call",
+        params: {
+          name: "get_project_session_status",
+          arguments: {},
+        },
+      },
+      {
+        authorization: `Bearer ${mcpToken}`,
+        accept: "application/json, text/event-stream",
+        "mcp-session-id": String(mcpSessionId),
+      },
+    );
+    expect(response.statusCode).toBe(200);
+    const wire = JSON.parse(response.body) as {
+      result: { content: Array<{ text: string }> };
+    };
+    const result = JSON.parse(wire.result.content[0]!.text) as {
+      ok: boolean;
+      data: { session: typeof session };
+      connection: { hostUrl: string };
+    };
+    expect(result).toMatchObject({
+      ok: true,
+      data: { session },
+      connection: { hostUrl: "wss://sync.example.test" },
+    });
   });
 });
 

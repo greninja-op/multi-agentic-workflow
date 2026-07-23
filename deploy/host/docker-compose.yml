@@ -20,9 +20,19 @@ services:
       CFLS_BASE_REVISION: ${CFLS_BASE_REVISION:?Set CFLS_BASE_REVISION in deploy/host/.env}
       CFLS_BIND_URL: wss://0.0.0.0:8730
       CFLS_DB_PATH: /var/lib/cfls/data/host.db
+      # Optional bearer credential for the hosted, metadata-only MCP endpoint.
+      # Leave empty to keep /mcp disabled; set a high-entropy value in the
+      # server-only deploy/host/.env file to enable it.
+      CFLS_REMOTE_MCP_TOKEN: ${CFLS_REMOTE_MCP_TOKEN:-}
+      # Returned in MCP connection metadata; clients connect to Nginx/TLS, not
+      # the container's loopback listener.
+      CFLS_PUBLIC_RELAY_URL: ${CFLS_PUBLIC_RELAY_URL:-wss://sync.cfls.cyberkunju.com}
       # The dashboard reveals collaboration metadata. Keep it disabled until
       # an authenticated admin route is deliberately configured.
       CFLS_DASHBOARD: "false"
+      # This public relay is intentionally used for a short-code product demo.
+      # It must remain false/absent for any production deployment.
+      CFLS_DEMO_OPEN_PAIRING: ${CFLS_DEMO_OPEN_PAIRING:-false}
     volumes:
       # Contains the durable SQLite store and encrypted admin-key fallback.
       - cfls-data:/var/lib/cfls

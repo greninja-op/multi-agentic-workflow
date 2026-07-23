@@ -10,7 +10,9 @@
  */
 
 import type { RiskLevel } from "@cfls/protocol";
+import { execFile } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 
 import * as vscode from "vscode";
@@ -39,7 +41,11 @@ import {
   decorateForPath,
   fileBadgeForPath,
 } from "./presence-ui";
-import { buildTeamPanelHtml } from "./team-panel";
+import { buildTeamPanelHtml, type TeamPanelLocalState } from "./team-panel";
+import {
+  buildLocalDiffPreview,
+  type LocalDiffPreview,
+} from "./local-diff-preview";
 import type { CoordinationViewModel } from "./view-model";
 
 export type { LocalApiSettings } from "./local-api-settings";
@@ -60,12 +66,16 @@ export interface SubscriptionCollection {
  */
 export interface VsCodeExtensionContext {
   subscriptions: SubscriptionCollection;
+  /** Root of the installed extension; used for CSP-safe webview assets. */
+  extensionUri?: vscode.Uri;
 }
 
 /** Options shared by the status bar and richer editor coordination cues. */
 export interface CoordinationUiOptions {
   /** The local member id; never show this member as someone else coordinating. */
   selfMemberId?: string;
+  /** Root of this extension's packaged resources. */
+  extensionUri?: vscode.Uri;
 }
 
 /** The current extension member id until per-device identities are wired in. */
@@ -214,6 +224,147 @@ export function showInformationMessage(
     return;
   }
   void vscode.window.showInformationMessage(message, options);
+}
+
+/** Execute the installed standalone client without using a shell. */
+function runCfls(
+  executable: string,
+  args: readonly string[],
+  cwd: string,
+): Promise<string> {
+  return new Promise((resolveCommand, rejectCommand) => {
+    execFile(
+      executable,
+      [...args],
+      { cwd, encoding: "utf8", windowsHide: true, timeout: 30_000 },
+      (error, stdout, stderr) => {
+        if (error === null) {
+          resolveCommand(stdout);
+          return;
+        }
+        const detail = stderr.trim() || stdout.trim() || error.message;
+        rejectCommand(new Error(detail));
+      },
+    );
+  });
+}
+
+/** Prefer the installer locations, with an explicit setting for custom installs. */
+function findCflsClient(): string {
+  const configured = vscode.workspace
+    .getConfiguration("cfls")
+    .get<string>("clientPath", "")
+    .trim();
+  if (configured !== "") return configured;
+  const installed =
+    process.platform === "win32"
+      ? join(
+          process.env["LOCALAPPDATA"] ?? homedir(),
+          "CFLS",
+          "bin",
+          "cfls.exe",
+        )
+      : join(homedir(), ".local", "bin", "cfls");
+  return existsSync(installed) ? installed : "cfls";
+}
+
+function pairingCodeFromOutput(output: string): string | undefined {
+  const match = /^CFLS_PAIR_CODE=(\d{8})$/mu.exec(output);
+  return match?.[1];
+}
+
+/**
+ * One-click, demo-only pairing for the current workspace. The extension talks
+ * only to the installed local client; that client obtains a normal signed
+ * invitation from the relay and then installs the existing per-user service.
+ */
+export async function setUpDemoWorkspace(): Promise<void> {
+  const workspace = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  if (workspace === undefined) {
+    throw new Error(
+      "Open the project folder in VS Code before setting up CFLS.",
+    );
+  }
+  const choice = await vscode.window.showQuickPick(
+    [
+      {
+        label: "Create a pairing code",
+        description:
+          "Use this on the first laptop, then share its 8-digit code.",
+        action: "host" as const,
+      },
+      {
+        label: "Join with a pairing code",
+        description:
+          "Use this on the second laptop after the first creates a code.",
+        action: "join" as const,
+      },
+    ],
+    {
+      title: "CFLS demo setup",
+      placeHolder: "Choose how this computer joins the demo",
+    },
+  );
+  if (choice === undefined) return;
+  const memberName = await vscode.window.showInputBox({
+    title: "CFLS display name (optional)",
+    prompt:
+      "For example, Alice. Leave blank to use this device's generated name.",
+    validateInput: (value) =>
+      /[\u0000-\u001f\u007f]/u.test(value) || value.trim().length > 64
+        ? "Use up to 64 normal characters."
+        : undefined,
+  });
+  if (memberName === undefined) return;
+  let code: string | undefined;
+  if (choice.action === "join") {
+    code = await vscode.window.showInputBox({
+      title: "Enter the 8-digit CFLS pairing code",
+      ignoreFocusOut: true,
+      validateInput: (value) =>
+        /^\d{8}$/u.test(value.trim()) ? undefined : "Enter exactly 8 digits.",
+    });
+    if (code === undefined) return;
+  }
+  const executable = findCflsClient();
+  const pairingArgs = [
+    choice.action === "host" ? "demo-host" : "demo-join",
+    ...(code === undefined ? [] : [code.trim()]),
+    ...(memberName.trim() === "" ? [] : ["--name", memberName.trim()]),
+  ];
+  const output = await vscode.window.withProgress(
+    {
+      location: vscode.ProgressLocation.Notification,
+      title: "CFLS is connecting this workspace…",
+      cancellable: false,
+    },
+    async () => {
+      const pairOutput = await runCfls(executable, pairingArgs, workspace);
+      await runCfls(
+        executable,
+        ["service", "install", "--workspace", workspace],
+        workspace,
+      );
+      return pairOutput;
+    },
+  );
+  if (choice.action === "host") {
+    const pairingCode = pairingCodeFromOutput(output);
+    if (pairingCode === undefined) {
+      throw new Error(
+        "CFLS paired this laptop but did not return a usable pairing code.",
+      );
+    }
+    await vscode.env.clipboard.writeText(pairingCode);
+    void vscode.window.showInformationMessage(
+      `CFLS pairing code: ${pairingCode} — copied. Enter it on the second laptop within 10 minutes.`,
+      { modal: true },
+    );
+    return;
+  }
+  void vscode.window.showInformationMessage(
+    "CFLS is connected. The background service is running for this folder.",
+  );
 }
 
 /**
@@ -419,7 +570,7 @@ export class StatusBarRenderer {
     );
     const hasActiveCoordination =
       !vm.offline && !vm.stale && coordinatedPaths.length > 0;
-    const icon = vm.offline
+    const stateIcon = vm.offline
       ? "$(cloud-offline)"
       : vm.stale
         ? "$(sync)"
@@ -429,7 +580,13 @@ export class StatusBarRenderer {
       : vm.statusText;
     const team = (vm.teamId ?? "Team").trim() || "Team";
     const teamLabel = team.length > 20 ? `${team.slice(0, 19)}…` : team;
-    this.item.text = `$(organization) ${hasActiveCoordination ? "$(warning)" : icon} CFLS · ${teamLabel}: ${summary}`;
+    const coordinationIcon = hasActiveCoordination ? "$(warning)" : stateIcon;
+    // Keep the CFLS mark at the leading edge. The whole chip is a command, so
+    // it remains obvious that clicking it opens the live team desk.
+    this.item.text = `$(organization) CFLS  ${coordinationIcon}  ${teamLabel} · ${summary}`;
+    this.item.command = vm.offline
+      ? "cfls.setupDemo"
+      : "cfls.showCoordinationStatus";
     this.item.backgroundColor = hasActiveCoordination
       ? new vscode.ThemeColor("statusBarItem.warningBackground")
       : undefined;
@@ -438,6 +595,11 @@ export class StatusBarRenderer {
       buildStatusTooltip(vm, this.selfMemberId),
     );
     tooltip.isTrusted = false;
+    if (vm.offline) {
+      tooltip.appendMarkdown(
+        "\n\nClick **CFLS** to set up this workspace with a short pairing code.",
+      );
+    }
     this.item.tooltip = tooltip;
   }
 
@@ -519,17 +681,21 @@ export class CoordinationUiController implements vscode.Disposable {
     vscode.TextEditorDecorationType
   >;
   private readonly fileDecorationProvider: CoordinationFileDecorationProvider;
+  private readonly extensionUri: vscode.Uri | undefined;
   private readonly disposables: vscode.Disposable[] = [];
   private viewModel: CoordinationViewModel | undefined;
   private decoratedEditor: vscode.TextEditor | undefined;
   private teamPanel: vscode.WebviewPanel | undefined;
   private teamName = "CFLS Team";
+  /** Local, unsaved source preview; never attached to coordination metadata. */
+  private localDiffPreview: LocalDiffPreview | undefined;
   private registered = false;
   private disposed = false;
   private addedToSubscriptions = false;
 
   constructor(options: CoordinationUiOptions = {}) {
     this.selfMemberId = options.selfMemberId ?? DEFAULT_SELF_MEMBER_ID;
+    this.extensionUri = options.extensionUri;
     this.statusBar = new StatusBarRenderer({ selfMemberId: this.selfMemberId });
     this.fileDecorationProvider = new CoordinationFileDecorationProvider(
       this.selfMemberId,
@@ -566,6 +732,17 @@ export class CoordinationUiController implements vscode.Disposable {
         ),
         vscode.window.onDidChangeActiveTextEditor(() => {
           this.applyActiveEditorDecoration();
+          this.postTeamPanelState();
+        }),
+        vscode.workspace.onDidChangeTextDocument((event) => {
+          if (event.document === vscode.window.activeTextEditor?.document) {
+            this.postTeamPanelState();
+          }
+        }),
+        vscode.workspace.onDidSaveTextDocument((document) => {
+          if (document === vscode.window.activeTextEditor?.document) {
+            this.postTeamPanelState();
+          }
         }),
       );
     }
@@ -606,6 +783,7 @@ export class CoordinationUiController implements vscode.Disposable {
     if (this.viewModel !== undefined) {
       this.statusBar.render(this.viewModel);
       this.applyActiveEditorDecoration();
+      this.postTeamPanelState();
     }
   }
 
@@ -623,10 +801,37 @@ export class CoordinationUiController implements vscode.Disposable {
         {
           enableScripts: true,
           retainContextWhenHidden: true,
+          ...(this.extensionUri !== undefined
+            ? {
+                localResourceRoots: [
+                  vscode.Uri.joinPath(this.extensionUri, "media"),
+                ],
+              }
+            : {}),
         },
       );
       this.teamPanel = panel;
-      panel.webview.html = buildTeamPanelHtml(viewModel, teamName);
+      const assets =
+        this.extensionUri === undefined
+          ? undefined
+          : {
+              scriptUri: panel.webview
+                .asWebviewUri(
+                  vscode.Uri.joinPath(
+                    this.extensionUri,
+                    "media",
+                    "team-panel.js",
+                  ),
+                )
+                .toString(),
+              cspSource: panel.webview.cspSource,
+            };
+      panel.webview.html = buildTeamPanelHtml(
+        viewModel,
+        teamName,
+        this.currentTeamPanelLocalState(),
+        assets,
+      );
       this.disposables.push(
         panel.onDidDispose(() => {
           if (this.teamPanel === panel) {
@@ -641,13 +846,60 @@ export class CoordinationUiController implements vscode.Disposable {
     this.postTeamPanelState(viewModel);
   }
 
-  private postTeamPanelState(viewModel: CoordinationViewModel): void {
-    if (this.teamPanel === undefined) {
+  /**
+   * Produce a bounded comparison only from the active local document and its
+   * saved on-disk version. This stays in the extension/webview process and is
+   * deliberately never merged into `CoordinationViewModel` or sent to CFLS.
+   */
+  private refreshLocalDiffPreview(): void {
+    const document = vscode.window.activeTextEditor?.document;
+    if (
+      document === undefined ||
+      document.uri.scheme !== "file" ||
+      !document.isDirty
+    ) {
+      this.localDiffPreview = undefined;
+      return;
+    }
+    const path = toRepoRelativePath(document.uri);
+    if (path === undefined) {
+      this.localDiffPreview = undefined;
+      return;
+    }
+    try {
+      this.localDiffPreview =
+        buildLocalDiffPreview(
+          path,
+          readFileSync(document.uri.fsPath, "utf8"),
+          document.getText(),
+        ) ?? undefined;
+    } catch {
+      // A newly created/virtual/unreadable file has no stable saved baseline.
+      this.localDiffPreview = undefined;
+    }
+  }
+
+  private currentTeamPanelLocalState(): TeamPanelLocalState {
+    this.refreshLocalDiffPreview();
+    return {
+      selfMemberId: this.selfMemberId,
+      ...(this.localDiffPreview !== undefined
+        ? { localDiffPreview: this.localDiffPreview }
+        : {}),
+    };
+  }
+
+  private postTeamPanelState(viewModel = this.viewModel): void {
+    if (this.teamPanel === undefined || viewModel === undefined) {
       return;
     }
     void this.teamPanel.webview.postMessage({
       type: "team-state",
-      state: { viewModel, teamName: this.teamName },
+      state: {
+        viewModel,
+        teamName: this.teamName,
+        ...this.currentTeamPanelLocalState(),
+      },
     });
   }
 
