@@ -230,6 +230,32 @@ const COORD_ENTRY_TYPES = [
   "planned_file_creation",
   "dependency_risk",
 ] as const;
+const MESSAGE_KINDS = [
+  "direct",
+  "broadcast",
+  "question",
+  "answer",
+  "heads_up",
+] as const;
+const MESSAGE_PRIORITIES = ["fyi", "normal", "urgent"] as const;
+const TASK_STATUSES = [
+  "proposed",
+  "accepted",
+  "rejected",
+  "in_progress",
+  "done",
+  "withdrawn",
+] as const;
+const LIVENESS_STATES = ["active", "idle", "gone"] as const;
+const NOTIFY_SEVERITIES = ["info", "warn", "urgent"] as const;
+const NOTIFY_SOURCES = [
+  "message",
+  "task",
+  "question",
+  "wake",
+  "conflict",
+] as const;
+const LUNA_ACTIONS = ["assign", "arbitrate", "answer", "summarize"] as const;
 
 const sessionIdSchema: ObjectSchema = {
   name: "SessionId",
@@ -435,6 +461,58 @@ const coordinationUpdateSchema: ObjectSchema = {
   },
 };
 
+const messageDtoSchema: ObjectSchema = {
+  name: "MessageDto",
+  fields: {
+    messageId: { spec: { kind: "string" } },
+    kind: { spec: { kind: "enum", values: MESSAGE_KINDS } },
+    sender: { spec: { kind: "object", schema: memberRefSchema } },
+    toMemberId: { spec: { kind: "string" }, optional: true },
+    priority: { spec: { kind: "enum", values: MESSAGE_PRIORITIES } },
+    body: { spec: { kind: "string" } },
+    correlationId: { spec: { kind: "string" }, optional: true },
+    answered: { spec: { kind: "boolean" }, optional: true },
+    eventRevision: { spec: { kind: "number" } },
+    sentAt: { spec: { kind: "string" } },
+  },
+};
+
+const taskDtoSchema: ObjectSchema = {
+  name: "TaskDto",
+  fields: {
+    taskId: { spec: { kind: "string" } },
+    title: { spec: { kind: "string" } },
+    description: { spec: { kind: "string" } },
+    assignee: { spec: { kind: "object", schema: memberRefSchema } },
+    assigner: { spec: { kind: "object", schema: memberRefSchema } },
+    status: { spec: { kind: "enum", values: TASK_STATUSES } },
+    eventRevision: { spec: { kind: "number" } },
+  },
+};
+
+const notificationDtoSchema: ObjectSchema = {
+  name: "NotificationDto",
+  fields: {
+    notificationId: { spec: { kind: "string" } },
+    toMemberId: { spec: { kind: "string" } },
+    severity: { spec: { kind: "enum", values: NOTIFY_SEVERITIES } },
+    source: { spec: { kind: "enum", values: NOTIFY_SOURCES } },
+    refId: { spec: { kind: "string" } },
+    summary: { spec: { kind: "string" } },
+    eventRevision: { spec: { kind: "number" } },
+  },
+};
+
+const liveDiffSchema: ObjectSchema = {
+  name: "LiveDiffDto",
+  fields: {
+    path: { spec: { kind: "string" } },
+    member: { spec: { kind: "object", schema: memberRefSchema } },
+    patch: { spec: { kind: "string" } },
+    eventRevision: { spec: { kind: "number" } },
+  },
+};
+
 const eventAppliedLockConflictSchema: ObjectSchema = {
   name: "EventAppliedLockConflict",
   fields: {
@@ -461,6 +539,27 @@ const sessionStateSnapshotSchema: ObjectSchema = {
         kind: "array",
         items: { kind: "object", schema: declaredIntentSchema },
       },
+    },
+    messages: {
+      spec: {
+        kind: "array",
+        items: { kind: "object", schema: messageDtoSchema },
+      },
+      optional: true,
+    },
+    tasks: {
+      spec: {
+        kind: "array",
+        items: { kind: "object", schema: taskDtoSchema },
+      },
+      optional: true,
+    },
+    notifications: {
+      spec: {
+        kind: "array",
+        items: { kind: "object", schema: notificationDtoSchema },
+      },
+      optional: true,
     },
     highestRevision: { spec: { kind: "number" } },
   },
@@ -732,6 +831,131 @@ export const PAYLOAD_SCHEMAS: Record<MessageTypeName, ObjectSchema> = {
         spec: { kind: "object", schema: eventAppliedLockConflictSchema },
         optional: true,
       },
+    },
+  },
+
+  // ---- V2 messaging (Phase 1; Req 1.1-1.4) ----
+  "message.send": {
+    name: "MessageSendPayload",
+    fields: {
+      kind: { spec: { kind: "enum", values: MESSAGE_KINDS } },
+      toMemberId: { spec: { kind: "string" }, optional: true },
+      priority: {
+        spec: { kind: "enum", values: MESSAGE_PRIORITIES },
+        optional: true,
+      },
+      body: { spec: { kind: "string" } },
+      correlationId: { spec: { kind: "string" }, optional: true },
+    },
+  },
+  "message.update": {
+    name: "MessageUpdatePayload",
+    fields: {
+      op: { spec: { kind: "enum", values: ["added", "updated"] } },
+      message: { spec: { kind: "object", schema: messageDtoSchema } },
+    },
+  },
+  "message.read": {
+    name: "MessageReadPayload",
+    fields: { messageId: { spec: { kind: "string" } } },
+  },
+
+  // ---- V2 tasks (Phase 2; Req 2.1-2.3) ----
+  "task.assign": {
+    name: "TaskAssignPayload",
+    fields: {
+      title: { spec: { kind: "string" } },
+      description: { spec: { kind: "string" } },
+      assigneeMemberId: { spec: { kind: "string" } },
+    },
+  },
+  "task.respond": {
+    name: "TaskRespondPayload",
+    fields: {
+      taskId: { spec: { kind: "string" } },
+      accept: { spec: { kind: "boolean" } },
+    },
+  },
+  "task.progress": {
+    name: "TaskProgressPayload",
+    fields: {
+      taskId: { spec: { kind: "string" } },
+      status: { spec: { kind: "enum", values: ["in_progress", "done"] } },
+    },
+  },
+  "task.withdraw": {
+    name: "TaskWithdrawPayload",
+    fields: { taskId: { spec: { kind: "string" } } },
+  },
+  "task.update": {
+    name: "TaskUpdatePayload",
+    fields: {
+      op: { spec: { kind: "enum", values: ["added", "updated", "removed"] } },
+      task: { spec: { kind: "object", schema: taskDtoSchema } },
+    },
+  },
+
+  // ---- V2 notifications, liveness & wake (Phase 3; Req 3.1-3.3) ----
+  "liveness.update": {
+    name: "LivenessUpdatePayload",
+    fields: {
+      memberId: { spec: { kind: "string" } },
+      state: { spec: { kind: "enum", values: LIVENESS_STATES } },
+      eventRevision: { spec: { kind: "number" } },
+    },
+  },
+  "wake.request": {
+    name: "WakeRequestPayload",
+    fields: {
+      targetMemberId: { spec: { kind: "string" } },
+      reason: { spec: { kind: "string" }, optional: true },
+    },
+  },
+  "notify.push": {
+    name: "NotifyPushPayload",
+    fields: {
+      notificationId: { spec: { kind: "string" } },
+      toMemberId: { spec: { kind: "string" } },
+      severity: { spec: { kind: "enum", values: NOTIFY_SEVERITIES } },
+      source: { spec: { kind: "enum", values: NOTIFY_SOURCES } },
+      refId: { spec: { kind: "string" } },
+      summary: { spec: { kind: "string" } },
+      eventRevision: { spec: { kind: "number" } },
+    },
+  },
+
+  // ---- V2 Luna orchestrator (Phase 4; Req 4.1-4.5) ----
+  "luna.request": {
+    name: "LunaRequestPayload",
+    fields: {
+      action: { spec: { kind: "enum", values: LUNA_ACTIONS } },
+      prompt: { spec: { kind: "string" } },
+      refId: { spec: { kind: "string" }, optional: true },
+    },
+  },
+  "luna.reply": {
+    name: "LunaReplyPayload",
+    fields: {
+      action: { spec: { kind: "enum", values: LUNA_ACTIONS } },
+      summary: { spec: { kind: "string" } },
+      producedTaskId: { spec: { kind: "string" }, optional: true },
+      producedMessageId: { spec: { kind: "string" }, optional: true },
+    },
+  },
+
+  // ---- V2 live diffs (Phase 5; Req 5.1-5.5) ----
+  "diff.share": {
+    name: "DiffSharePayload",
+    fields: {
+      path: { spec: { kind: "string" } },
+      patch: { spec: { kind: "string" } },
+    },
+  },
+  "diff.update": {
+    name: "DiffUpdatePayload",
+    fields: {
+      op: { spec: { kind: "enum", values: ["shared", "removed"] } },
+      diff: { spec: { kind: "object", schema: liveDiffSchema } },
     },
   },
 

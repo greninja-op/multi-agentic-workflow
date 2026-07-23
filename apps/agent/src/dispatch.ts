@@ -11,7 +11,13 @@ import {
   type AgentPort,
   type McpEnvelope,
 } from "@cfls/mcp-server";
-import type { ScopeKind, SessionId } from "@cfls/protocol";
+import type {
+  LunaAction,
+  MessageKind,
+  MessagePriority,
+  ScopeKind,
+  SessionId,
+} from "@cfls/protocol";
 
 /** The set of dispatchable Local_API method names (mirrors the 13 MCP tools). */
 export const LOCAL_API_METHODS = [
@@ -27,6 +33,22 @@ export const LOCAL_API_METHODS = [
   "release_lock",
   "get_connection_status",
   "get_project_session_status",
+  "send_message",
+  "list_messages",
+  "mark_message_read",
+  "ask_question",
+  "answer_question",
+  "list_open_questions",
+  "assign_task",
+  "respond_to_task",
+  "update_task_progress",
+  "list_tasks",
+  "get_liveness",
+  "wake_member",
+  "get_notifications",
+  "ask_luna",
+  "share_diff",
+  "list_diffs",
 ] as const;
 
 export type LocalApiMethod = (typeof LOCAL_API_METHODS)[number];
@@ -105,6 +127,119 @@ export async function dispatchLocalRequest(
       return wrap(port.getConnectionStatus());
     case "get_project_session_status":
       return wrap(port.getProjectSessionStatus());
+    case "send_message":
+      return wrap(
+        port.sendMessage({
+          session: p.session as SessionId,
+          kind: (p.kind as MessageKind) ?? "direct",
+          ...(p.toMemberId !== undefined
+            ? { toMemberId: p.toMemberId as string }
+            : {}),
+          ...(p.priority !== undefined
+            ? { priority: p.priority as MessagePriority }
+            : {}),
+          body: (p.body as string) ?? "",
+          ...(p.correlationId !== undefined
+            ? { correlationId: p.correlationId as string }
+            : {}),
+        }),
+      );
+    case "list_messages":
+      return wrap(port.listMessages({ session: p.session as SessionId }));
+    case "mark_message_read":
+      return wrap(port.markMessageRead({ messageId: p.messageId as string }));
+    case "ask_question":
+      return wrap(
+        port.sendMessage({
+          session: p.session as SessionId,
+          kind: "question",
+          ...(p.toMemberId !== undefined
+            ? { toMemberId: p.toMemberId as string }
+            : {}),
+          ...(p.priority !== undefined
+            ? { priority: p.priority as MessagePriority }
+            : {}),
+          body: (p.body as string) ?? "",
+          ...(p.correlationId !== undefined
+            ? { correlationId: p.correlationId as string }
+            : {}),
+        }),
+      );
+    case "answer_question":
+      return wrap(
+        port.sendMessage({
+          session: p.session as SessionId,
+          kind: "answer",
+          ...(p.toMemberId !== undefined
+            ? { toMemberId: p.toMemberId as string }
+            : {}),
+          ...(p.priority !== undefined
+            ? { priority: p.priority as MessagePriority }
+            : {}),
+          body: (p.body as string) ?? "",
+          ...(p.correlationId !== undefined
+            ? { correlationId: p.correlationId as string }
+            : {}),
+        }),
+      );
+    case "list_open_questions":
+      return wrap(port.listOpenQuestions({ session: p.session as SessionId }));
+    case "assign_task":
+      return wrap(
+        port.assignTask({
+          session: p.session as SessionId,
+          title: (p.title as string) ?? "",
+          description: (p.description as string) ?? "",
+          assigneeMemberId: (p.assigneeMemberId as string) ?? "",
+        }),
+      );
+    case "respond_to_task":
+      return wrap(
+        port.respondTask({
+          taskId: p.taskId as string,
+          accept: Boolean(p.accept),
+        }),
+      );
+    case "update_task_progress":
+      return wrap(
+        port.updateTaskProgress({
+          taskId: p.taskId as string,
+          status: p.status as "in_progress" | "done",
+        }),
+      );
+    case "list_tasks":
+      return wrap(port.listTasks({ session: p.session as SessionId }));
+    case "get_liveness":
+      return wrap(port.getLiveness({ session: p.session as SessionId }));
+    case "wake_member":
+      return wrap(
+        port.wake({
+          session: p.session as SessionId,
+          targetMemberId: (p.targetMemberId as string) ?? "",
+          ...(p.reason !== undefined ? { reason: p.reason as string } : {}),
+        }),
+      );
+    case "get_notifications":
+      return wrap(port.getNotifications({ session: p.session as SessionId }));
+    case "ask_luna":
+      return wrap(
+        port.askLuna({
+          session: p.session as SessionId,
+          action: p.action as LunaAction,
+          prompt: (p.prompt as string) ?? "",
+          ...(p.refId !== undefined ? { refId: p.refId as string } : {}),
+        }),
+      );
+    case "share_diff":
+      return wrap(
+        port.shareDiff({
+          session: p.session as SessionId,
+          path: (p.path as string) ?? "",
+          ...(p.patch !== undefined ? { patch: p.patch as string } : {}),
+        }),
+      );
+    case "list_diffs":
+      return wrap(port.listDiffs({ session: p.session as SessionId }));
     default:
       return wrap({
         ok: false,

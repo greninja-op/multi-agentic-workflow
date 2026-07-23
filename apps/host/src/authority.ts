@@ -14,13 +14,22 @@
 
 import {
   CoordinationEventLog,
+  DiffRegistry,
   ExpiryEngine,
   IngestGate,
   IntentRegistry,
+  LivenessTracker,
   LockRegistry,
+  MessageRegistry,
+  NotificationRegistry,
   PresenceRegistry,
   RevisionCounter,
+  RulesLunaBrain,
+  TaskRegistry,
+  buildNotification,
+  type LunaContext,
   checkInboundMinimization,
+  findMinimizationViolations,
   normalizePath,
   restoreSessionState,
   serializeSessionState,
@@ -49,8 +58,24 @@ import {
   type LockAcquirePayload,
   type LockOverridePayload,
   type LockReleasePayload,
+  type EventEnvelope,
   type MemberRef,
   type MembershipRegistryEntry,
+  type DiffSharePayload,
+  type LiveDiffDto,
+  type LivenessState,
+  type LunaReplyDto,
+  type LunaRequestPayload,
+  type MessageDto,
+  type MessageReadPayload,
+  type MessageSendPayload,
+  type NotificationDto,
+  type WakeRequestPayload,
+  type TaskAssignPayload,
+  type TaskDto,
+  type TaskProgressPayload,
+  type TaskRespondPayload,
+  type TaskWithdrawPayload,
   type PathDeletedPayload,
   type PathRenamedPayload,
   type PresenceReportPayload,
@@ -92,6 +117,49 @@ export type HandshakeResult =
   | { ok: true; principal: AuthPrincipal; highestRevision: number }
   | { ok: false; code: ErrorCode; message: string };
 
+/**
+ * A V2 messaging update to deliver to session participants (Phase 1; Req 1.1).
+ * Unlike a {@link CoordinationUpdate} (delivered to all session subscribers), a
+ * message is delivered only to its `audience`: `"all"` for broadcast/heads-up,
+ * or the specific memberIds (sender + recipient) for a directed message,
+ * question, or answer.
+ */
+export interface MessageBroadcast {
+  op: "added" | "updated";
+  message: MessageDto;
+  audience: "all" | string[];
+}
+
+/**
+ * A V2 task update to deliver to session participants (Phase 2; Req 2.1). Tasks
+ * are shared team coordination metadata, so a task update is delivered to every
+ * member of the session.
+ */
+export interface TaskBroadcast {
+  op: "added" | "updated";
+  task: TaskDto;
+}
+
+/** The reserved Luna orchestrator member identity (Phase 4; idea.md §5). */
+const LUNA_MEMBER: MemberRef = { memberId: "luna", deviceId: "luna" };
+
+/** A liveness change to broadcast (Phase 3; Req 3.1). */
+export interface LivenessBroadcast {
+  memberId: string;
+  state: LivenessState;
+  eventRevision: number;
+}
+
+/**
+ * A V2 live-diff update to deliver to session participants (Phase 5; Req 5.1–5.3).
+ * Live_Diffs are shared with authorized members only — i.e. every member of the
+ * trusted session — so a diff update is delivered to the whole session.
+ */
+export interface DiffBroadcast {
+  op: "shared" | "removed";
+  diff: LiveDiffDto;
+}
+
 /** Outcome of ingesting a single coordination event. */
 export interface IngestOutcome {
   accepted: boolean;
@@ -103,6 +171,16 @@ export interface IngestOutcome {
   reason?: string;
   /** Coordination updates to broadcast to the session's subscribers (Req 25). */
   broadcasts: CoordinationUpdate[];
+  /** V2 message updates to deliver to their audience (Phase 1; Req 1.1). */
+  messageUpdates?: MessageBroadcast[];
+  /** V2 task updates to broadcast to the session (Phase 2; Req 2.1). */
+  taskUpdates?: TaskBroadcast[];
+  /** V2 notifications to deliver to their target member (Phase 3; Req 3.2, 3.3). */
+  notifications?: NotificationDto[];
+  /** V2 Luna reply to return to the requester (Phase 4; Req 4.2–4.5). */
+  lunaReply?: LunaReplyDto;
+  /** V2 live-diff updates to deliver to the session (Phase 5; Req 5.1–5.3). */
+  diffUpdates?: DiffBroadcast[];
 }
 
 /** Effects that must be committed with the event rather than during apply. */
@@ -114,6 +192,13 @@ interface MutationEffects {
 export interface AuthorityOptions {
   /** Heartbeat/expiry tuning (Req 26). */
   expiry?: ExpiryConfigInput;
+  /**
+   * Opt-in Live_Diff sharing (Phase 5; Req 5.1, 5.4). Off by default so the host
+   * behaves exactly as V1 (metadata only); when a team enables `liveDiffs` in
+   * `.coordination/config.json`, the CLI passes `true` here and `diff.share`
+   * events are accepted, data-minimized, and broadcast to the session.
+   */
+  liveDiffsEnabled?: boolean;
 }
 
 /** The result of one `sync.request` (Req 9). */
@@ -126,6 +211,22 @@ export class CoordinationAuthority {
   private readonly locks = new LockRegistry();
   private readonly intents = new IntentRegistry();
   private readonly presence = new PresenceRegistry();
+  private readonly messages = new MessageRegistry();
+  private readonly tasks = new TaskRegistry();
+  private readonly notificationsRegistry = new NotificationRegistry();
+  private readonly diffs = new DiffRegistry();
+  private readonly liveness = new LivenessTracker();
+  /**
+   * The default, deterministic Luna brain (Phase 4; Req 4.1). It requires no
+   * external service. An optional LLM-backed brain is future/advanced wiring and
+   * is off by default, keeping the sync ingest path key-free (Req 4.1.3, 4.1.4).
+   */
+  private readonly luna = new RulesLunaBrain();
+  /** `session_key` → last broadcast liveness state per member (change detection). */
+  private readonly lastLiveness = new Map<string, Map<string, LivenessState>>();
+  private notificationSeq = 0;
+  /** Whether opt-in Live_Diff sharing is enabled for this host (Phase 5; Req 5.1). */
+  private readonly liveDiffsEnabled: boolean;
   private readonly revisions: RevisionCounter;
   private readonly eventLog = new CoordinationEventLog();
   private readonly gate: IngestGate;
@@ -156,6 +257,7 @@ export class CoordinationAuthority {
     private readonly store: Store,
     options: AuthorityOptions = {},
   ) {
+    this.liveDiffsEnabled = options.liveDiffsEnabled ?? false;
     this.revisions = new RevisionCounter();
     this.expiry = new ExpiryEngine(
       this.locks,
@@ -169,6 +271,16 @@ export class CoordinationAuthority {
       intents: this.intents,
       presence: this.presence,
       revisions: this.revisions,
+      // Messages are persisted and restored via the same snapshot mechanism as
+      // locks/presence/intents (Req 1.4, X.2); no separate table is needed.
+      messages: this.messages,
+      // Tasks likewise persist via the snapshot (Req 2.1, X.2).
+      tasks: this.tasks,
+      // Notifications likewise persist via the snapshot (Req 3.2, X.2).
+      notifications: this.notificationsRegistry,
+      // Live diffs persist via the snapshot only when the opt-in is enabled; the
+      // registry stays empty and unused otherwise (Phase 5; Req 5.1, 5.4, X.2).
+      ...(this.liveDiffsEnabled ? { diffs: this.diffs } : {}),
     };
 
     // Reseed the replay guard from persisted per-device counters (Req 7.5).
@@ -426,12 +538,19 @@ export class CoordinationAuthority {
     }
 
     // Data-minimization rejection before any state change (Req 29.5).
-    const minimization = checkInboundMinimization(envelope);
-    if (!minimization.ok) {
+    //
+    // V2 messages carry a `body` of legitimate team text (idea.md §6 Safety),
+    // which the generic gate would otherwise reject by field name as
+    // source-content. For `message.send` we therefore value-scan the body for
+    // secrets/absolute/out-of-tree/excluded paths (Req 1.4) and run the generic
+    // gate over the rest of the envelope; every other event type is checked
+    // wholesale exactly as in V1.
+    const minimizationError = this.checkEventMinimization(envelope);
+    if (minimizationError !== undefined) {
       return {
         accepted: false,
-        error: minimization.error.code,
-        reason: minimization.error.message,
+        error: minimizationError.code,
+        reason: minimizationError.message,
         broadcasts: [],
       };
     }
@@ -480,6 +599,11 @@ export class CoordinationAuthority {
     const acknowledgement: {
       lockConflict?: EventAppliedLockConflict;
     } = {};
+    const messageUpdates: MessageBroadcast[] = [];
+    const taskUpdates: TaskBroadcast[] = [];
+    const notifications: NotificationDto[] = [];
+    const lunaOut: { reply?: LunaReplyDto } = {};
+    const diffUpdates: DiffBroadcast[] = [];
 
     let result: IngestResult;
     try {
@@ -494,6 +618,11 @@ export class CoordinationAuthority {
             audits,
             acknowledgement,
             effects,
+            messageUpdates,
+            taskUpdates,
+            notifications,
+            lunaOut,
+            diffUpdates,
           ),
       );
     } catch {
@@ -607,6 +736,9 @@ export class CoordinationAuthority {
       this.eventLog.append(envelope.session, update);
     }
 
+    // The member just acted, so refresh its liveness activity (Req 3.1).
+    this.liveness.recordActivity(envelope.session, member.memberId, Date.now());
+
     return {
       accepted: true,
       eventRevision,
@@ -614,6 +746,11 @@ export class CoordinationAuthority {
         ? { lockConflict: acknowledgement.lockConflict }
         : {}),
       broadcasts,
+      ...(messageUpdates.length > 0 ? { messageUpdates } : {}),
+      ...(taskUpdates.length > 0 ? { taskUpdates } : {}),
+      ...(notifications.length > 0 ? { notifications } : {}),
+      ...(lunaOut.reply !== undefined ? { lunaReply: lunaOut.reply } : {}),
+      ...(diffUpdates.length > 0 ? { diffUpdates } : {}),
     };
   }
 
@@ -632,9 +769,40 @@ export class CoordinationAuthority {
     audits: AuditRecord[],
     acknowledgement: { lockConflict?: EventAppliedLockConflict },
     effects: MutationEffects,
+    messageUpdates: MessageBroadcast[],
+    taskUpdates: TaskBroadcast[],
+    notifications: NotificationDto[],
+    lunaOut: { reply?: LunaReplyDto },
+    diffUpdates: DiffBroadcast[],
   ): { code: ErrorCode; reason: string } | undefined {
     const session = envelope.session;
     const now = new Date().toISOString();
+
+    // Emit a notification to `toMemberId` unless it is the acting member's own
+    // action (Req 3.2.3). Recorded durably (via snapshot) and returned for live
+    // delivery. Each notification gets its own fresh Event_Revision.
+    const emitNotification = (
+      toMemberId: string,
+      source: NotificationDto["source"],
+      refId: string,
+      summary: string,
+      priority?: "fyi" | "normal" | "urgent",
+    ): void => {
+      if (toMemberId === "" || toMemberId === member.memberId) {
+        return;
+      }
+      const notification = buildNotification({
+        notificationId: `${envelope.eventId}-n${(this.notificationSeq += 1)}`,
+        toMemberId,
+        source,
+        refId,
+        summary,
+        eventRevision: this.revisions.next(session),
+        ...(priority !== undefined ? { priority } : {}),
+      });
+      this.notificationsRegistry.add(session, notification);
+      notifications.push(notification);
+    };
 
     switch (envelope.type) {
       case "presence.report": {
@@ -956,6 +1124,298 @@ export class CoordinationAuthority {
       case "dep.delta": {
         const payload = envelope.payload as DepDeltaPayload;
         effects.dependencyGraph = this.mergeDependencyDelta(session, payload);
+        return undefined;
+      }
+
+      case "message.send": {
+        const payload = envelope.payload as MessageSendPayload;
+        const result = this.messages.append({
+          session,
+          messageId: envelope.eventId,
+          kind: payload.kind,
+          sender: member,
+          ...(payload.toMemberId !== undefined
+            ? { toMemberId: payload.toMemberId }
+            : {}),
+          priority: payload.priority ?? "normal",
+          body: payload.body,
+          ...(payload.correlationId !== undefined
+            ? { correlationId: payload.correlationId }
+            : {}),
+          eventRevision,
+          sentAt: now,
+        });
+        messageUpdates.push({
+          op: "added",
+          message: result.message,
+          audience: messageAudience(result.message),
+        });
+        // Notify the recipient for questions and urgent directed messages
+        // (Req 3.2). Broadcasts alert via the message priority on the client.
+        if (result.message.toMemberId !== undefined) {
+          if (result.message.kind === "question") {
+            emitNotification(
+              result.message.toMemberId,
+              "question",
+              result.message.messageId,
+              `${member.memberId} asked you a question`,
+            );
+          } else if (result.message.priority === "urgent") {
+            emitNotification(
+              result.message.toMemberId,
+              "message",
+              result.message.messageId,
+              `Urgent message from ${member.memberId}`,
+              "urgent",
+            );
+          }
+        }
+        // An answer flips its correlated question to `answered`; surface the
+        // updated question to that question's audience so the asker sees it.
+        if (result.answeredQuestion !== undefined) {
+          messageUpdates.push({
+            op: "updated",
+            message: result.answeredQuestion,
+            audience: messageAudience(result.answeredQuestion),
+          });
+        }
+        return undefined;
+      }
+
+      case "message.read": {
+        const payload = envelope.payload as MessageReadPayload;
+        // Read state is tracked live; it is intentionally not part of the
+        // authoritative snapshot in Phase 1 (see messaging.ts). No broadcast.
+        this.messages.markRead(session, payload.messageId, member.memberId);
+        return undefined;
+      }
+
+      case "task.assign": {
+        const payload = envelope.payload as TaskAssignPayload;
+        // A task targets a member (not a device); assignee.deviceId is unknown
+        // at assign time and unused by the lifecycle's authorization checks.
+        const result = this.tasks.assign({
+          session,
+          taskId: envelope.eventId,
+          title: payload.title,
+          description: payload.description,
+          assignee: { memberId: payload.assigneeMemberId, deviceId: "" },
+          assigner: member,
+          eventRevision,
+        });
+        if (!result.ok) {
+          return { code: result.code, reason: result.reason };
+        }
+        taskUpdates.push({ op: "added", task: result.task });
+        // Notify the assignee of the incoming task awaiting approval (Req 3.2).
+        emitNotification(
+          result.task.assignee.memberId,
+          "task",
+          result.task.taskId,
+          `${member.memberId} assigned you: ${result.task.title}`,
+        );
+        audits.push({
+          member,
+          action: "create",
+          targetScope: `task:${result.task.taskId}`,
+          eventRevision,
+          time: now,
+        });
+        return undefined;
+      }
+
+      case "task.respond": {
+        const payload = envelope.payload as TaskRespondPayload;
+        const result = this.tasks.respond({
+          session,
+          taskId: payload.taskId,
+          requester: member,
+          accept: payload.accept,
+          eventRevision,
+        });
+        if (!result.ok) {
+          return { code: result.code, reason: result.reason };
+        }
+        taskUpdates.push({ op: "updated", task: result.task });
+        audits.push({
+          member,
+          action: "update",
+          targetScope: `task:${result.task.taskId}`,
+          eventRevision,
+          time: now,
+        });
+        return undefined;
+      }
+
+      case "task.progress": {
+        const payload = envelope.payload as TaskProgressPayload;
+        const result = this.tasks.progress({
+          session,
+          taskId: payload.taskId,
+          requester: member,
+          status: payload.status,
+          eventRevision,
+        });
+        if (!result.ok) {
+          return { code: result.code, reason: result.reason };
+        }
+        taskUpdates.push({ op: "updated", task: result.task });
+        audits.push({
+          member,
+          action: "update",
+          targetScope: `task:${result.task.taskId}`,
+          eventRevision,
+          time: now,
+        });
+        return undefined;
+      }
+
+      case "task.withdraw": {
+        const payload = envelope.payload as TaskWithdrawPayload;
+        const result = this.tasks.withdraw({
+          session,
+          taskId: payload.taskId,
+          requester: member,
+          eventRevision,
+        });
+        if (!result.ok) {
+          return { code: result.code, reason: result.reason };
+        }
+        taskUpdates.push({ op: "updated", task: result.task });
+        audits.push({
+          member,
+          action: "withdraw",
+          targetScope: `task:${result.task.taskId}`,
+          eventRevision,
+          time: now,
+        });
+        return undefined;
+      }
+
+      case "wake.request": {
+        const payload = envelope.payload as WakeRequestPayload;
+        // A wake is delivered as a notification to the target (Req 3.3); it is
+        // surfaced at the target's next action rather than interrupting it.
+        emitNotification(
+          payload.targetMemberId,
+          "wake",
+          payload.targetMemberId,
+          payload.reason !== undefined && payload.reason.length > 0
+            ? `${member.memberId}: ${payload.reason}`
+            : `${member.memberId} asked you to resume`,
+        );
+        return undefined;
+      }
+
+      case "luna.request": {
+        const payload = envelope.payload as LunaRequestPayload;
+        const context: LunaContext = {
+          session,
+          requester: member,
+          members: this.sessionMemberIds(session),
+          liveness: this.liveness.states(session, Date.now()),
+          tasks: this.tasks.allTasks(session),
+        };
+        // The default Luna brain is synchronous and deterministic (Req 4.1).
+        const decision = this.luna.decide(payload, context);
+        const reply: LunaReplyDto = {
+          action: decision.action,
+          summary: decision.summary,
+        };
+
+        // Luna routes an assignment as a proposed Task assigned by Luna (Req 4.2).
+        if (decision.assignment !== undefined) {
+          const taskId = `${envelope.eventId}-luna-task`;
+          const taskRev = this.revisions.next(session);
+          const assigned = this.tasks.assign({
+            session,
+            taskId,
+            title: decision.assignment.title,
+            description: decision.assignment.description,
+            assignee: {
+              memberId: decision.assignment.assigneeMemberId,
+              deviceId: "",
+            },
+            assigner: LUNA_MEMBER,
+            eventRevision: taskRev,
+          });
+          if (assigned.ok) {
+            taskUpdates.push({ op: "added", task: assigned.task });
+            reply.producedTaskId = taskId;
+            emitNotification(
+              decision.assignment.assigneeMemberId,
+              "task",
+              taskId,
+              `Luna assigned you: ${decision.assignment.title}`,
+            );
+          }
+        }
+
+        // Luna communicates arbitration/answers as a Message from Luna (Req 4.3, 4.4).
+        if (decision.message !== undefined) {
+          const messageId = `${envelope.eventId}-luna-msg`;
+          const msgRev = this.revisions.next(session);
+          const kind =
+            decision.message.toMemberId !== undefined ? "direct" : "broadcast";
+          const appended = this.messages.append({
+            session,
+            messageId,
+            kind,
+            sender: LUNA_MEMBER,
+            ...(decision.message.toMemberId !== undefined
+              ? { toMemberId: decision.message.toMemberId }
+              : {}),
+            priority: "normal",
+            body: decision.message.body,
+            eventRevision: msgRev,
+            sentAt: now,
+          });
+          messageUpdates.push({
+            op: "added",
+            message: appended.message,
+            audience: messageAudience(appended.message),
+          });
+          reply.producedMessageId = messageId;
+        }
+
+        lunaOut.reply = reply;
+        return undefined;
+      }
+
+      case "diff.share": {
+        // Opt-in Live_Diff sharing (Phase 5; Req 5.1–5.4). When the team has not
+        // enabled it, reject so the host behaves exactly as V1 (metadata only).
+        if (!this.liveDiffsEnabled) {
+          return {
+            code: "AUTH_NOT_AUTHORIZED",
+            reason:
+              "Live_Diff sharing is disabled for this team; enable liveDiffs in .coordination/config.json to share diffs.",
+          };
+        }
+        const payload = envelope.payload as DiffSharePayload;
+        const path = normalizePath(payload.path);
+        const diff: LiveDiffDto = {
+          path,
+          member,
+          patch: payload.patch,
+          eventRevision,
+        };
+        const op = this.diffs.share(session, diff);
+        // Broadcast the authoritative diff (or its removal) to the whole trusted
+        // session — authorized members only (Req 5.2). On removal the stored diff
+        // is gone, so echo the request's (empty-patch) diff for the update.
+        const shared =
+          op === "shared"
+            ? (this.diffs.get(session, member.memberId, path) ?? diff)
+            : diff;
+        diffUpdates.push({ op, diff: shared });
+        audits.push({
+          member,
+          action: op === "shared" ? "update" : "withdraw",
+          targetScope: `diff:${path}`,
+          eventRevision,
+          time: now,
+        });
         return undefined;
       }
 
@@ -1425,6 +1885,56 @@ export class CoordinationAuthority {
     }
   }
 
+  /**
+   * Data-minimization gate for one inbound envelope (Req 29.5, 1.4). Returns a
+   * `ProtocolError` to reject with, or `undefined` when clean. For
+   * `message.send`, the free-text `body` is allowed team content but its value
+   * is still scanned for secrets/absolute/out-of-tree/excluded paths (Req 1.4);
+   * the remaining envelope fields are checked by the standard gate.
+   */
+  private checkEventMinimization(
+    envelope: EventEnvelope,
+  ): { code: ErrorCode; message: string } | undefined {
+    if (envelope.type === "message.send") {
+      const payload = envelope.payload as MessageSendPayload;
+      const bodyViolations = findMinimizationViolations(payload.body);
+      if (bodyViolations.length > 0) {
+        return {
+          code: "FORMAT_ERROR",
+          message: `data-minimization violation in message body: ${bodyViolations[0]!.message}`,
+        };
+      }
+      // Check the rest of the envelope (without the free-text body) normally.
+      const { body: _body, ...restPayload } = payload;
+      void _body;
+      const rest = { ...envelope, payload: restPayload };
+      const check = checkInboundMinimization(rest);
+      return check.ok ? undefined : check.error;
+    }
+    if (envelope.type === "diff.share") {
+      // A Live_Diff `patch` is opt-in source-derived team content (Phase 5;
+      // Req 5.1, 5.3). It is allowed by field name only when the feature is
+      // enabled, but its value is still scanned for secrets/absolute/out-of-tree/
+      // excluded paths so credentials are never shared even inside a diff.
+      const payload = envelope.payload as DiffSharePayload;
+      const patchViolations = findMinimizationViolations(payload.patch);
+      if (patchViolations.length > 0) {
+        return {
+          code: "FORMAT_ERROR",
+          message: `data-minimization violation in live diff patch: ${patchViolations[0]!.message}`,
+        };
+      }
+      // Check the rest of the envelope (without the free-text patch) normally.
+      const { patch: _patch, ...restPayload } = payload;
+      void _patch;
+      const rest = { ...envelope, payload: restPayload };
+      const check = checkInboundMinimization(rest);
+      return check.ok ? undefined : check.error;
+    }
+    const check = checkInboundMinimization(envelope);
+    return check.ok ? undefined : check.error;
+  }
+
   /** The gate's permission predicate: the sender must be admitted (Req 7.7, 10.7). */
   private checkPermission(
     envelope: TypedEventEnvelope,
@@ -1469,6 +1979,142 @@ export class CoordinationAuthority {
   /** The current authoritative snapshot for a session (Req 9.5). */
   snapshot(session: SessionId) {
     return serializeSessionState(session, this.registries);
+  }
+
+  /**
+   * Messages visible to `memberId` with an Event_Revision greater than
+   * `fromRevision` (Phase 1; Req 1.4, X.2). The server sends these to a
+   * reconnecting member after `sync.request` so messages sent while it was
+   * offline are delivered — incremental `sync.events` only carries
+   * CoordinationUpdates, so messages ride this parallel channel. Delivery is
+   * idempotent: the agent keys messages by `messageId`.
+   */
+  messagesSince(
+    session: SessionId,
+    fromRevision: number,
+    memberId: string,
+  ): MessageDto[] {
+    return this.messages
+      .messagesFor(session, memberId)
+      .filter((message) => message.eventRevision > fromRevision);
+  }
+
+  /**
+   * Tasks with an Event_Revision greater than `fromRevision` (Phase 2; Req 2.1,
+   * X.2). The server resends these as `task.update` to a reconnecting member so
+   * task changes made while it was offline are delivered over the parallel task
+   * channel (incremental `sync.events` carries only CoordinationUpdates).
+   */
+  tasksSince(session: SessionId, fromRevision: number): TaskDto[] {
+    return this.tasks
+      .allTasks(session)
+      .filter((task) => task.eventRevision > fromRevision);
+  }
+
+  /**
+   * Currently-shared Live_Diffs with an Event_Revision greater than
+   * `fromRevision` (Phase 5; Req 5.1–5.3, X.2). Empty unless the opt-in is
+   * enabled. The server resends these as `diff.update` to a reconnecting member
+   * so diffs shared while it was offline are delivered over the parallel diff
+   * channel (incremental `sync.events` carries only CoordinationUpdates).
+   */
+  diffsSince(session: SessionId, fromRevision: number): LiveDiffDto[] {
+    if (!this.liveDiffsEnabled) {
+      return [];
+    }
+    return this.diffs.since(session, fromRevision);
+  }
+
+  /** All currently-shared Live_Diffs for a session (for a list_diffs query). */
+  allDiffs(session: SessionId): LiveDiffDto[] {
+    return this.liveDiffsEnabled ? this.diffs.allDiffs(session) : [];
+  }
+
+  // -------------------------------------------------------------------------
+  // Liveness & notifications (Phase 3; Req 3.1–3.3)
+  // -------------------------------------------------------------------------
+
+  /** Set the live member roster used for liveness derivation (Req 3.1). */
+  setLiveRoster(session: SessionId, connectedMemberIds: Iterable<string>): void {
+    this.liveness.setConnected(session, connectedMemberIds);
+  }
+
+  /** Record that a member acted (heartbeat/auth), refreshing its liveness (Req 3.1). */
+  recordMemberActivity(
+    session: SessionId,
+    memberId: string,
+    atMs: number = Date.now(),
+  ): void {
+    this.liveness.recordActivity(session, memberId, atMs);
+  }
+
+  /** Current liveness state of every known member (Req 3.1). */
+  livenessStates(
+    session: SessionId,
+    nowMs: number = Date.now(),
+  ): { memberId: string; state: LivenessState }[] {
+    return this.liveness.states(session, nowMs);
+  }
+
+  /**
+   * Members whose derived liveness changed since the last call (Req 3.1). The
+   * server broadcasts a `liveness.update` for each. The advisory `eventRevision`
+   * is the session's current highest revision (liveness is derived, not an
+   * ordered coordination event, so it is applied by memberId, not by revision).
+   */
+  livenessChanges(
+    session: SessionId,
+    nowMs: number = Date.now(),
+  ): LivenessBroadcast[] {
+    const key = sessionKey(session);
+    const previous = this.lastLiveness.get(key) ?? new Map<string, LivenessState>();
+    const current = new Map<string, LivenessState>();
+    const changes: LivenessBroadcast[] = [];
+    const revision = this.revisions.highest(session);
+    for (const { memberId, state } of this.liveness.states(session, nowMs)) {
+      current.set(memberId, state);
+      if (previous.get(memberId) !== state) {
+        changes.push({ memberId, state, eventRevision: revision });
+      }
+    }
+    // A member that dropped out of the roster entirely becomes 'gone'.
+    for (const [memberId, prevState] of previous) {
+      if (!current.has(memberId) && prevState !== "gone") {
+        changes.push({ memberId, state: "gone", eventRevision: revision });
+        current.set(memberId, "gone");
+      }
+    }
+    this.lastLiveness.set(key, current);
+    return changes;
+  }
+
+  /**
+   * Notifications for `memberId` with an Event_Revision greater than
+   * `fromRevision` (Phase 3; Req 3.2, X.2). The server resends these on
+   * reconnect so notifications raised while the member was offline are delivered.
+   */
+  notificationsSince(
+    session: SessionId,
+    fromRevision: number,
+    memberId: string,
+  ): NotificationDto[] {
+    return this.notificationsRegistry.since(session, memberId, fromRevision);
+  }
+
+  /** All notifications addressed to `memberId` (for a get_notifications query). */
+  notificationsFor(session: SessionId, memberId: string): NotificationDto[] {
+    return this.notificationsRegistry.forMember(session, memberId);
+  }
+
+  /** The admitted, non-revoked member ids for a session (for Luna context). */
+  private sessionMemberIds(session: SessionId): string[] {
+    const seen = new Set<string>();
+    for (const entry of this.membershipBySession.get(sessionKey(session)) ?? []) {
+      if (entry.invitationValid && !entry.revoked) {
+        seen.add(entry.memberId);
+      }
+    }
+    return [...seen].sort((a, b) => a.localeCompare(b));
   }
 
   /**
@@ -1702,4 +2348,23 @@ export class CoordinationAuthority {
       return null;
     }
   }
+}
+
+/**
+ * Who should receive a message (Phase 1; Req 1.1): everyone for
+ * broadcast/heads-up, or the sender plus the recipient for a directed message,
+ * question, or answer.
+ */
+function messageAudience(message: MessageDto): "all" | string[] {
+  if (message.kind === "broadcast" || message.kind === "heads_up") {
+    return "all";
+  }
+  const audience = [message.sender.memberId];
+  if (
+    message.toMemberId !== undefined &&
+    message.toMemberId !== message.sender.memberId
+  ) {
+    audience.push(message.toMemberId);
+  }
+  return audience;
 }

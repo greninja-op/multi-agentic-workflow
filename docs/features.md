@@ -135,8 +135,8 @@ configuration.
 their declared task descriptions, repository-relative files, and current activity roles.
 `get_connection_status` provides the live connected/offline team roster, including idle
 teammates. The editor panel combines both projections so the team list remains visible even
-before someone edits a file. They are part of the 13-tool MCP surface alongside the risk,
-intent, lock, and live-update tools.
+before someone edits a file. They are part of the MCP surface alongside the risk, intent,
+lock, and live-update tools, and the V2 collaboration tools described in section 2b.
 
 **How to use it:** Start the local Agent, then configure the coding-agent client to run:
 
@@ -146,6 +146,51 @@ cfls mcp --workspace /absolute/repo/path
 
 The bridge authenticates to the already-running local Agent; it does not connect directly to
 the Host. The returned activity is coordination metadata, never source files or diffs.
+
+---
+
+## 2b. Collaboration layer (V2)
+
+V2 extends coordination *awareness* into coordination *action*. Every feature reuses the V1
+authority, identity, ordering, and persistence, and each is available to coding agents through
+MCP tools. Nothing here shares source content except the explicitly opt-in live diffs.
+
+### 2b.1 Messaging
+
+Teammates and agents exchange directed or broadcast messages, ask questions and get answers
+(correlated by id), set a priority (`fyi`/`normal`/`urgent`), and track read state. Message
+bodies are **team text**, not source: the Host still value-scans them and rejects secrets,
+credentials, and paths outside the repository. MCP: `send_message`, `list_messages`,
+`mark_message_read`, `ask_question`, `answer_question`, `list_open_questions`.
+
+### 2b.2 Tasks & approvals
+
+A task is assigned to a member as a *proposal*; the assignee approves or rejects it before it
+enters their task list, then advances it to `in_progress`/`done`. Only the assignee responds
+and reports progress. MCP: `assign_task`, `respond_to_task`, `update_task_progress`,
+`list_tasks`.
+
+### 2b.3 Notifications, liveness & wake
+
+Each member has a derived liveness state — `active`, `idle`, or `gone`. Incoming tasks,
+questions, and urgent messages raise severity-tagged notifications. A **wake** asks an idle
+teammate to resume; it is delivered at their next action rather than interrupting mid-task.
+MCP: `get_liveness`, `wake_member`, `get_notifications`.
+
+### 2b.4 Luna orchestrator
+
+Luna is a coordination orchestrator that can assign work, arbitrate an ambiguous conflict,
+answer a cross-agent question, or summarize the team's state in plain language. It is
+**rules-based and deterministic by default and needs no external service or API key**; an
+optional LLM adapter exists but is off unless configured. MCP: `ask_luna`.
+
+### 2b.5 Live diffs (opt-in)
+
+The only feature that shares source-derived content. It is **disabled by default** and enabled
+per team by setting `liveDiffs.enabled` to `true` in `.coordination/config.json`. When enabled,
+a member can share their current change diff for a path; the Host value-scans the patch for
+secrets/excluded paths and broadcasts it to the trusted team, where it is shown **read-only** —
+never applied to a recipient's files automatically. MCP: `share_diff`, `list_diffs`.
 
 ---
 

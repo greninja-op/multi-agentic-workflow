@@ -82,10 +82,24 @@ export interface AutoSyncConfig {
   autoMerge: boolean;
 }
 
+/**
+ * The optional, team-shared, committed `liveDiffs` block of
+ * `<repoRoot>/.coordination/config.json` (V2 Phase 5; Req 5.1, 5.4). Live_Diff
+ * sharing is the only feature that moves source-derived content, so it is
+ * DISABLED by default and only runs when a team explicitly opts in. Holds ONLY
+ * this non-secret switch.
+ */
+export interface LiveDiffsConfig {
+  /** Master switch. When `false` (default) no diffs are ever shared. */
+  enabled: boolean;
+}
+
 /** `<repoRoot>/.coordination/config.json` — the committed, team-shared config. */
 export interface TeamConfigFile {
   /** Optional automatic git sync settings (Model A). Absent ⇒ disabled defaults. */
   autoSync?: Partial<AutoSyncConfig>;
+  /** Optional opt-in live-diff sharing (Phase 5). Absent ⇒ disabled. */
+  liveDiffs?: Partial<LiveDiffsConfig>;
 }
 
 /** The safe defaults for {@link AutoSyncConfig}: opt-in disabled (never runs). */
@@ -96,6 +110,11 @@ export const DEFAULT_AUTO_SYNC: AutoSyncConfig = {
   commitIntervalSec: 20,
   fetchIntervalSec: 20,
   autoMerge: false,
+};
+
+/** The safe default for {@link LiveDiffsConfig}: opt-in disabled (Phase 5; Req 5.1). */
+export const DEFAULT_LIVE_DIFFS: LiveDiffsConfig = {
+  enabled: false,
 };
 
 /** Parse a JSON file into an object, or `null` when absent/unparseable. */
@@ -648,6 +667,25 @@ export function readAutoSyncConfig(path: string): AutoSyncConfig {
   };
 }
 
+/**
+ * Read the effective {@link LiveDiffsConfig} from `<repoRoot>/.coordination/config.json`
+ * (Phase 5; Req 5.1, 5.4). ALWAYS returns a fully-populated config; a missing or
+ * partial config is a safe no-op because the default is `enabled: false`. Only a
+ * literal boolean `true` enables sharing (not a truthy value), so a typo never
+ * silently turns on source-derived content sharing.
+ */
+export function readLiveDiffsConfig(path: string): LiveDiffsConfig {
+  const raw = readJsonObject(path);
+  const block =
+    raw !== null &&
+    typeof raw["liveDiffs"] === "object" &&
+    raw["liveDiffs"] !== null &&
+    !Array.isArray(raw["liveDiffs"])
+      ? (raw["liveDiffs"] as Record<string, unknown>)
+      : {};
+  return { enabled: block["enabled"] === true };
+}
+
 /** Read the whole team config file, or `{}` when absent/invalid. */
 export function readTeamConfig(path: string): TeamConfigFile {
   const raw = readJsonObject(path);
@@ -661,6 +699,13 @@ export function readTeamConfig(path: string): TeamConfigFile {
     !Array.isArray(raw["autoSync"])
   ) {
     out.autoSync = raw["autoSync"] as Partial<AutoSyncConfig>;
+  }
+  if (
+    typeof raw["liveDiffs"] === "object" &&
+    raw["liveDiffs"] !== null &&
+    !Array.isArray(raw["liveDiffs"])
+  ) {
+    out.liveDiffs = raw["liveDiffs"] as Partial<LiveDiffsConfig>;
   }
   return out;
 }

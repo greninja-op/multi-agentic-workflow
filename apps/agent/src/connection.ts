@@ -20,12 +20,18 @@ import { randomUUID, randomBytes } from "node:crypto";
 import {
   buildEnvelope,
   BroadcastMessageType,
+  DiffMessageType,
   ErrorMessageType,
   EventMessageType,
+  MessagingMessageType,
+  TaskMessageType,
+  PresenceLivenessMessageType,
   MESSAGE_FORMAT_VERSION,
   type CoordinationUpdate,
   type ErrorPayload,
   type EventAppliedPayload,
+  type LunaReplyDto,
+  type LunaRequestPayload,
   type MessagePayloadMap,
   type MessageTypeName,
   type ParticipantsUpdatePayload,
@@ -379,6 +385,71 @@ export class HostConnection extends EventEmitter {
       }
       return;
     }
+    if (message?.type === MessagingMessageType.UPDATE) {
+      // A V2 message update (Phase 1): { op, message }. Hand it to the agent so
+      // its message view converges.
+      const payload = message.payload;
+      if (
+        payload !== null &&
+        typeof payload === "object" &&
+        typeof payload.message === "object" &&
+        payload.message !== null
+      ) {
+        this.emit("message", payload);
+      }
+      return;
+    }
+    if (message?.type === TaskMessageType.UPDATE) {
+      // A V2 task update (Phase 2): { op, task }. Hand it to the agent so its
+      // task view converges.
+      const payload = message.payload;
+      if (
+        payload !== null &&
+        typeof payload === "object" &&
+        typeof payload.task === "object" &&
+        payload.task !== null
+      ) {
+        this.emit("task", payload);
+      }
+      return;
+    }
+    if (message?.type === PresenceLivenessMessageType.LIVENESS_UPDATE) {
+      const payload = message.payload;
+      if (
+        payload !== null &&
+        typeof payload === "object" &&
+        typeof payload.memberId === "string" &&
+        typeof payload.state === "string"
+      ) {
+        this.emit("liveness", payload);
+      }
+      return;
+    }
+    if (message?.type === PresenceLivenessMessageType.NOTIFY_PUSH) {
+      const payload = message.payload;
+      if (
+        payload !== null &&
+        typeof payload === "object" &&
+        typeof payload.notificationId === "string"
+      ) {
+        this.emit("notification", payload);
+      }
+      return;
+    }
+    if (message?.type === DiffMessageType.UPDATE) {
+      // A V2 live-diff update (Phase 5): { op, diff }. Hand it to the agent so
+      // its diff view converges.
+      const payload = message.payload;
+      if (
+        payload !== null &&
+        typeof payload === "object" &&
+        typeof payload.diff === "object" &&
+        payload.diff !== null
+      ) {
+        this.emit("diff", payload);
+      }
+      return;
+    }
     if (message?.type === ErrorMessageType.ERROR) {
       // EventEmitter treats an unhandled "error" as a thrown exception. A
       // correlated mutation caller already receives this error through its
@@ -638,6 +709,36 @@ export class HostConnection extends EventEmitter {
       this.highestRevision = snapshot.highestRevision;
     }
     return { kind: "snapshot", snapshot };
+  }
+
+  /**
+   * Send a `luna.request` and await Luna's `luna.reply` (Phase 4; Req 4.2–4.5).
+   * The waiter is registered before the frame is written so a fast reply cannot
+   * race past it. Returns the reply, or an offline/timeout error.
+   */
+  async requestLuna(
+    payload: LunaRequestPayload,
+    timeoutMs = 6000,
+  ): Promise<
+    { ok: true; reply: LunaReplyDto } | { ok: false; message: string }
+  > {
+    if (this.state !== "online" || this.ws === undefined) {
+      return { ok: false, message: "Agent offline; Luna is unavailable." };
+    }
+    const replyPromise = this.waitFor(
+      (m) => m?.type === "luna.reply",
+      timeoutMs,
+    );
+    const sent = this.send("luna.request", payload);
+    if (!sent.ok) {
+      return { ok: false, message: sent.message };
+    }
+    try {
+      const message = await replyPromise;
+      return { ok: true, reply: message.payload as LunaReplyDto };
+    } catch {
+      return { ok: false, message: "Luna did not reply in time." };
+    }
   }
 
   /**

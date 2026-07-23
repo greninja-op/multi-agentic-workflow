@@ -26,15 +26,22 @@ import type {
 import {
   ALL_SOFT_CONFIG,
   buildRiskMap,
+  buildNotification,
+  DiffRegistry,
   IntentRegistry,
+  LivenessTracker,
   LockRegistry,
+  MessageRegistry,
+  NotificationRegistry,
   normalizePath,
   normalizePathKey,
   PresenceRegistry,
   type RepositoryRulesConfig,
   resolveMode,
   RevisionCounter,
+  RulesLunaBrain,
   sessionKey,
+  TaskRegistry,
 } from "@cfls/core-state";
 
 import type {
@@ -61,10 +68,38 @@ import type {
   GetRiskMapRequest,
   GetTeamStatusData,
   GetTeamStatusRequest,
+  AssignTaskData,
+  AssignTaskRequest,
+  GetLivenessData,
+  GetLivenessRequest,
+  GetNotificationsData,
+  GetNotificationsRequest,
+  ListMessagesData,
+  ListMessagesRequest,
+  ListOpenQuestionsData,
+  ListOpenQuestionsRequest,
+  ListTasksData,
+  ListTasksRequest,
+  MarkMessageReadData,
+  MarkMessageReadRequest,
+  AskLunaData,
+  AskLunaRequest,
+  ShareDiffData,
+  ShareDiffRequest,
+  ListDiffsData,
+  ListDiffsRequest,
   ProjectSessionStatusData,
+  WakeData,
+  WakeRequest,
+  RespondTaskData,
+  RespondTaskRequest,
+  UpdateTaskProgressData,
+  UpdateTaskProgressRequest,
   ReleaseLockData,
   ReleaseLockRequest,
   RiskPathEntry,
+  SendMessageData,
+  SendMessageRequest,
   SubscribeData,
   SubscribeRequest,
   UpdateIntentData,
@@ -145,10 +180,19 @@ export class CoreStateAgentPort implements AgentPort {
   private readonly locks = new LockRegistry();
   private readonly intents = new IntentRegistry();
   private readonly presence = new PresenceRegistry();
+  private readonly messages = new MessageRegistry();
+  private readonly tasks = new TaskRegistry();
+  private readonly liveness = new LivenessTracker();
+  private readonly notificationsRegistry = new NotificationRegistry();
+  private readonly luna = new RulesLunaBrain();
+  private readonly diffs = new DiffRegistry();
   private readonly revisions = new RevisionCounter();
 
   private lockSeq = 0;
   private intentSeq = 0;
+  private messageSeq = 0;
+  private taskSeq = 0;
+  private notificationSeq = 0;
   private subscriptionSeq = 0;
   private readonly subscribers = new Map<
     string,
@@ -695,6 +739,303 @@ export class CoreStateAgentPort implements AgentPort {
       this.subscribers.set(subscriptionId, onUpdate);
     }
     return { ok: true, data: { subscriptionId } };
+  }
+
+  // ---- V2 messaging (Phase 1; Req 1.1–1.4) ---------------------------------
+
+  sendMessage(req: SendMessageRequest): AgentResult<SendMessageData> {
+    if (!this.online) {
+      return offlineQueuedResult("send_message");
+    }
+    if (!this.sameSession(req.session)) {
+      return this.sessionNotFound();
+    }
+    if (!this.authorized) {
+      return this.notAuthorized();
+    }
+    const eventRevision = this.revisions.next(this.session);
+    const messageId = `msg-${(this.messageSeq += 1)}`;
+    const { message } = this.messages.append({
+      session: this.session,
+      messageId,
+      kind: req.kind,
+      sender: this.self,
+      ...(req.toMemberId !== undefined ? { toMemberId: req.toMemberId } : {}),
+      priority: req.priority ?? "normal",
+      body: req.body,
+      ...(req.correlationId !== undefined
+        ? { correlationId: req.correlationId }
+        : {}),
+      eventRevision,
+      sentAt: new Date(this.now()).toISOString(),
+    });
+    return { ok: true, data: { messageId: message.messageId, eventRevision } };
+  }
+
+  listMessages(req: ListMessagesRequest): AgentResult<ListMessagesData> {
+    if (!this.sameSession(req.session)) {
+      return this.sessionNotFound();
+    }
+    if (!this.authorized) {
+      return this.notAuthorized();
+    }
+    return {
+      ok: true,
+      data: {
+        messages: this.messages.messagesFor(this.session, this.self.memberId),
+        unreadCount: this.messages.unreadCountFor(
+          this.session,
+          this.self.memberId,
+        ),
+      },
+    };
+  }
+
+  markMessageRead(
+    req: MarkMessageReadRequest,
+  ): AgentResult<MarkMessageReadData> {
+    if (!this.online) {
+      return offlineQueuedResult("mark_message_read");
+    }
+    this.messages.markRead(this.session, req.messageId, this.self.memberId);
+    const eventRevision = this.revisions.next(this.session);
+    return { ok: true, data: { eventRevision } };
+  }
+
+  listOpenQuestions(
+    req: ListOpenQuestionsRequest,
+  ): AgentResult<ListOpenQuestionsData> {
+    if (!this.sameSession(req.session)) {
+      return this.sessionNotFound();
+    }
+    if (!this.authorized) {
+      return this.notAuthorized();
+    }
+    return {
+      ok: true,
+      data: {
+        questions: this.messages.openQuestionsFor(
+          this.session,
+          this.self.memberId,
+        ),
+      },
+    };
+  }
+
+  // ---- V2 tasks (Phase 2; Req 2.1–2.3) -------------------------------------
+
+  assignTask(req: AssignTaskRequest): AgentResult<AssignTaskData> {
+    if (!this.online) {
+      return offlineQueuedResult("assign_task");
+    }
+    if (!this.sameSession(req.session)) {
+      return this.sessionNotFound();
+    }
+    if (!this.authorized) {
+      return this.notAuthorized();
+    }
+    const eventRevision = this.revisions.next(this.session);
+    const taskId = `task-${(this.taskSeq += 1)}`;
+    this.tasks.assign({
+      session: this.session,
+      taskId,
+      title: req.title,
+      description: req.description,
+      assignee: { memberId: req.assigneeMemberId, deviceId: "" },
+      assigner: this.self,
+      eventRevision,
+    });
+    return { ok: true, data: { taskId, eventRevision } };
+  }
+
+  respondTask(req: RespondTaskRequest): AgentResult<RespondTaskData> {
+    if (!this.online) {
+      return offlineQueuedResult("respond_to_task");
+    }
+    const eventRevision = this.revisions.next(this.session);
+    const result = this.tasks.respond({
+      session: this.session,
+      taskId: req.taskId,
+      requester: this.self,
+      accept: req.accept,
+      eventRevision,
+    });
+    if (!result.ok) {
+      return { ok: false, error: { code: result.code, message: result.reason } };
+    }
+    return { ok: true, data: { eventRevision } };
+  }
+
+  updateTaskProgress(
+    req: UpdateTaskProgressRequest,
+  ): AgentResult<UpdateTaskProgressData> {
+    if (!this.online) {
+      return offlineQueuedResult("update_task_progress");
+    }
+    const eventRevision = this.revisions.next(this.session);
+    const result = this.tasks.progress({
+      session: this.session,
+      taskId: req.taskId,
+      requester: this.self,
+      status: req.status,
+      eventRevision,
+    });
+    if (!result.ok) {
+      return { ok: false, error: { code: result.code, message: result.reason } };
+    }
+    return { ok: true, data: { eventRevision } };
+  }
+
+  listTasks(req: ListTasksRequest): AgentResult<ListTasksData> {
+    if (!this.sameSession(req.session)) {
+      return this.sessionNotFound();
+    }
+    if (!this.authorized) {
+      return this.notAuthorized();
+    }
+    return {
+      ok: true,
+      data: {
+        tasks: this.tasks.allTasks(this.session),
+        myTaskList: this.tasks.taskListFor(this.session, this.self.memberId),
+        incomingProposals: this.tasks.incomingProposalsFor(
+          this.session,
+          this.self.memberId,
+        ),
+      },
+    };
+  }
+
+  // ---- V2 liveness, notifications & wake (Phase 3; Req 3.1–3.3) ------------
+
+  getLiveness(req: GetLivenessRequest): AgentResult<GetLivenessData> {
+    if (!this.sameSession(req.session)) {
+      return this.sessionNotFound();
+    }
+    if (!this.authorized) {
+      return this.notAuthorized();
+    }
+    const now = this.now();
+    // Seed the tracker from the simulated roster; treat self as recently active.
+    this.liveness.setConnected(this.session, [
+      ...this.connectedMembers,
+      this.self.memberId,
+    ]);
+    this.liveness.recordActivity(this.session, this.self.memberId, now);
+    return { ok: true, data: { members: this.liveness.states(this.session, now) } };
+  }
+
+  wake(req: WakeRequest): AgentResult<WakeData> {
+    if (!this.online) {
+      return offlineQueuedResult("wake_member");
+    }
+    if (!this.sameSession(req.session)) {
+      return this.sessionNotFound();
+    }
+    if (!this.authorized) {
+      return this.notAuthorized();
+    }
+    const eventRevision = this.revisions.next(this.session);
+    this.notificationsRegistry.add(
+      this.session,
+      buildNotification({
+        notificationId: `notif-${(this.notificationSeq += 1)}`,
+        toMemberId: req.targetMemberId,
+        source: "wake",
+        refId: req.targetMemberId,
+        summary:
+          req.reason !== undefined && req.reason.length > 0
+            ? `${this.self.memberId}: ${req.reason}`
+            : `${this.self.memberId} asked you to resume`,
+        eventRevision,
+      }),
+    );
+    return { ok: true, data: { targetMemberId: req.targetMemberId } };
+  }
+
+  getNotifications(
+    req: GetNotificationsRequest,
+  ): AgentResult<GetNotificationsData> {
+    if (!this.sameSession(req.session)) {
+      return this.sessionNotFound();
+    }
+    if (!this.authorized) {
+      return this.notAuthorized();
+    }
+    return {
+      ok: true,
+      data: {
+        notifications: this.notificationsRegistry.forMember(
+          this.session,
+          this.self.memberId,
+        ),
+      },
+    };
+  }
+
+  // ---- V2 Luna orchestrator (Phase 4; Req 4.1–4.5) -------------------------
+
+  askLuna(req: AskLunaRequest): AgentResult<AskLunaData> {
+    if (!this.online) {
+      return offlineQueuedResult("ask_luna");
+    }
+    if (!this.sameSession(req.session)) {
+      return this.sessionNotFound();
+    }
+    if (!this.authorized) {
+      return this.notAuthorized();
+    }
+    const decision = this.luna.decide(
+      {
+        action: req.action,
+        prompt: req.prompt,
+        ...(req.refId !== undefined ? { refId: req.refId } : {}),
+      },
+      {
+        session: this.session,
+        requester: this.self,
+        members: [...this.connectedMembers, this.self.memberId],
+        liveness: [{ memberId: this.self.memberId, state: "active" }],
+        tasks: this.tasks.allTasks(this.session),
+      },
+    );
+    return {
+      ok: true,
+      data: { action: decision.action, summary: decision.summary },
+    };
+  }
+
+  // ---- V2 live diffs (Phase 5; Req 5.1–5.5) --------------------------------
+
+  shareDiff(req: ShareDiffRequest): AgentResult<ShareDiffData> {
+    if (!this.online) {
+      return offlineQueuedResult("share_diff");
+    }
+    if (!this.sameSession(req.session)) {
+      return this.sessionNotFound();
+    }
+    if (!this.authorized) {
+      return this.notAuthorized();
+    }
+    const eventRevision = this.revisions.next(this.session);
+    const patch = req.patch ?? "";
+    const op = this.diffs.share(this.session, {
+      path: normalizePath(req.path),
+      member: this.self,
+      patch,
+      eventRevision,
+    });
+    return { ok: true, data: { eventRevision, shared: op === "shared" } };
+  }
+
+  listDiffs(req: ListDiffsRequest): AgentResult<ListDiffsData> {
+    if (!this.sameSession(req.session)) {
+      return this.sessionNotFound();
+    }
+    if (!this.authorized) {
+      return this.notAuthorized();
+    }
+    return { ok: true, data: { diffs: this.diffs.allDiffs(this.session) } };
   }
 
   // ---- Dependency-graph helpers --------------------------------------------

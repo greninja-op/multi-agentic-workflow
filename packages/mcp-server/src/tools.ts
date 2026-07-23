@@ -22,6 +22,7 @@ import type {
   AgentPort,
   DeclareIntentRequest,
   ReleaseLockRequest,
+  SendMessageRequest,
   SessionRef,
   SubscribeData,
 } from "./port";
@@ -41,6 +42,27 @@ export const TOOL_NAMES = [
   "subscribe_to_coordination_updates",
   "get_connection_status",
   "get_project_session_status",
+  // V2 Phase 1 — messaging (Req 1.1–1.4).
+  "send_message",
+  "list_messages",
+  "mark_message_read",
+  "ask_question",
+  "answer_question",
+  "list_open_questions",
+  // V2 Phase 2 — tasks (Req 2.1–2.3).
+  "assign_task",
+  "respond_to_task",
+  "update_task_progress",
+  "list_tasks",
+  // V2 Phase 3 — liveness, notifications & wake (Req 3.1–3.3).
+  "get_liveness",
+  "wake_member",
+  "get_notifications",
+  // V2 Phase 4 — Luna orchestrator (Req 4.1–4.5).
+  "ask_luna",
+  // V2 Phase 5 — live diffs, opt-in (Req 5.1–5.5).
+  "share_diff",
+  "list_diffs",
 ] as const;
 
 export type ToolName = (typeof TOOL_NAMES)[number];
@@ -72,6 +94,20 @@ const sessionSchema = z.object({
 });
 
 const scopeKindSchema = z.enum(["file", "folder", "glob"]);
+const messagePrioritySchema = z.enum(["fyi", "normal", "urgent"]);
+const messageKindSchema = z.enum([
+  "direct",
+  "broadcast",
+  "question",
+  "answer",
+  "heads_up",
+]);
+const lunaActionSchema = z.enum([
+  "assign",
+  "arbitrate",
+  "answer",
+  "summarize",
+]);
 
 /** Serialise an envelope as both structured content and a JSON text block. */
 function toToolResult<T>(envelope: McpEnvelope<T>): CallToolResult {
@@ -353,6 +389,315 @@ export function registerTools(server: McpServer, port: AgentPort): McpServer {
       inputSchema: {},
     },
     () => respond(port, port.getProjectSessionStatus()),
+  );
+
+  // ---- V2 Phase 1 — messaging (Req 1.1–1.4) --------------------------------
+
+  // 13. send_message
+  server.registerTool(
+    "send_message",
+    {
+      description:
+        "Send a coordination message to a teammate (direct) or the whole team " +
+        "(broadcast), or a heads-up. Team text only — never source content or secrets.",
+      inputSchema: {
+        session: sessionSchema,
+        kind: messageKindSchema.default("direct"),
+        toMemberId: z.string().optional(),
+        priority: messagePrioritySchema.optional(),
+        body: z.string(),
+        correlationId: z.string().optional(),
+      },
+    },
+    (args) => {
+      const req: SendMessageRequest = {
+        session: args.session,
+        kind: args.kind,
+        body: args.body,
+      };
+      if (args.toMemberId !== undefined) req.toMemberId = args.toMemberId;
+      if (args.priority !== undefined) req.priority = args.priority;
+      if (args.correlationId !== undefined)
+        req.correlationId = args.correlationId;
+      return respond(port, port.sendMessage(req));
+    },
+  );
+
+  // 14. list_messages
+  server.registerTool(
+    "list_messages",
+    {
+      description:
+        "List messages visible to this member (sent by or addressed to it) plus the unread count.",
+      inputSchema: { session: sessionSchema },
+    },
+    (args) => respond(port, port.listMessages({ session: args.session })),
+  );
+
+  // 15. mark_message_read
+  server.registerTool(
+    "mark_message_read",
+    {
+      description: "Mark a delivered message as read.",
+      inputSchema: { messageId: z.string() },
+    },
+    (args) =>
+      respond(port, port.markMessageRead({ messageId: args.messageId })),
+  );
+
+  // 16. ask_question — a message that expects a reply, correlated by id
+  server.registerTool(
+    "ask_question",
+    {
+      description:
+        "Ask a teammate a question that expects a reply. Provide a correlationId " +
+        "so the answer can be matched to this question.",
+      inputSchema: {
+        session: sessionSchema,
+        toMemberId: z.string(),
+        body: z.string(),
+        correlationId: z.string(),
+        priority: messagePrioritySchema.optional(),
+      },
+    },
+    (args) => {
+      const req: SendMessageRequest = {
+        session: args.session,
+        kind: "question",
+        toMemberId: args.toMemberId,
+        body: args.body,
+        correlationId: args.correlationId,
+      };
+      if (args.priority !== undefined) req.priority = args.priority;
+      return respond(port, port.sendMessage(req));
+    },
+  );
+
+  // 17. answer_question — reply to a question by its correlationId
+  server.registerTool(
+    "answer_question",
+    {
+      description:
+        "Answer a teammate's question, referencing the same correlationId as the question.",
+      inputSchema: {
+        session: sessionSchema,
+        toMemberId: z.string(),
+        body: z.string(),
+        correlationId: z.string(),
+        priority: messagePrioritySchema.optional(),
+      },
+    },
+    (args) => {
+      const req: SendMessageRequest = {
+        session: args.session,
+        kind: "answer",
+        toMemberId: args.toMemberId,
+        body: args.body,
+        correlationId: args.correlationId,
+      };
+      if (args.priority !== undefined) req.priority = args.priority;
+      return respond(port, port.sendMessage(req));
+    },
+  );
+
+  // 18. list_open_questions
+  server.registerTool(
+    "list_open_questions",
+    {
+      description:
+        "List unanswered questions addressed to this member (the 'wait for the answer' surface).",
+      inputSchema: { session: sessionSchema },
+    },
+    (args) => respond(port, port.listOpenQuestions({ session: args.session })),
+  );
+
+  // ---- V2 Phase 2 — tasks (Req 2.1–2.3) ------------------------------------
+
+  // 19. assign_task
+  server.registerTool(
+    "assign_task",
+    {
+      description:
+        "Assign a task to a teammate (created as 'proposed' — the assignee must " +
+        "approve it before it enters their task list). Title/description are team text.",
+      inputSchema: {
+        session: sessionSchema,
+        title: z.string(),
+        description: z.string().default(""),
+        assigneeMemberId: z.string(),
+      },
+    },
+    (args) =>
+      respond(
+        port,
+        port.assignTask({
+          session: args.session,
+          title: args.title,
+          description: args.description,
+          assigneeMemberId: args.assigneeMemberId,
+        }),
+      ),
+  );
+
+  // 20. respond_to_task
+  server.registerTool(
+    "respond_to_task",
+    {
+      description:
+        "Approve or reject an incoming proposed task. Only the assignee may respond.",
+      inputSchema: { taskId: z.string(), accept: z.boolean() },
+    },
+    (args) =>
+      respond(
+        port,
+        port.respondTask({ taskId: args.taskId, accept: args.accept }),
+      ),
+  );
+
+  // 21. update_task_progress
+  server.registerTool(
+    "update_task_progress",
+    {
+      description:
+        "Advance an accepted task to 'in_progress' or 'done'. Only the assignee may update progress.",
+      inputSchema: {
+        taskId: z.string(),
+        status: z.enum(["in_progress", "done"]),
+      },
+    },
+    (args) =>
+      respond(
+        port,
+        port.updateTaskProgress({ taskId: args.taskId, status: args.status }),
+      ),
+  );
+
+  // 22. list_tasks
+  server.registerTool(
+    "list_tasks",
+    {
+      description:
+        "List all session tasks, plus this member's accepted task list and incoming proposals.",
+      inputSchema: { session: sessionSchema },
+    },
+    (args) => respond(port, port.listTasks({ session: args.session })),
+  );
+
+  // ---- V2 Phase 3 — liveness, notifications & wake (Req 3.1–3.3) -----------
+
+  // 23. get_liveness
+  server.registerTool(
+    "get_liveness",
+    {
+      description:
+        "Return each team member's liveness: active, idle, or gone (Req 3.1).",
+      inputSchema: { session: sessionSchema },
+    },
+    (args) => respond(port, port.getLiveness({ session: args.session })),
+  );
+
+  // 24. wake_member
+  server.registerTool(
+    "wake_member",
+    {
+      description:
+        "Ask an idle teammate to resume. Delivered at the target's next action, " +
+        "never as a mid-turn interrupt.",
+      inputSchema: {
+        session: sessionSchema,
+        targetMemberId: z.string(),
+        reason: z.string().optional(),
+      },
+    },
+    (args) =>
+      respond(
+        port,
+        port.wake({
+          session: args.session,
+          targetMemberId: args.targetMemberId,
+          ...(args.reason !== undefined ? { reason: args.reason } : {}),
+        }),
+      ),
+  );
+
+  // 25. get_notifications
+  server.registerTool(
+    "get_notifications",
+    {
+      description:
+        "Return this member's notifications (incoming tasks, questions, urgent " +
+        "messages, wakes), with severity.",
+      inputSchema: { session: sessionSchema },
+    },
+    (args) => respond(port, port.getNotifications({ session: args.session })),
+  );
+
+  // ---- V2 Phase 4 — Luna orchestrator (Req 4.1–4.5) ------------------------
+
+  // 26. ask_luna
+  server.registerTool(
+    "ask_luna",
+    {
+      description:
+        "Ask Luna, the coordination orchestrator, to assign work, arbitrate an " +
+        "ambiguous conflict, answer a cross-agent question, or summarize team " +
+        "activity in plain language. The prompt is team text — never source content.",
+      inputSchema: {
+        session: sessionSchema,
+        action: lunaActionSchema,
+        prompt: z.string(),
+        refId: z.string().optional(),
+      },
+    },
+    (args) =>
+      respond(
+        port,
+        port.askLuna({
+          session: args.session,
+          action: args.action,
+          prompt: args.prompt,
+          ...(args.refId !== undefined ? { refId: args.refId } : {}),
+        }),
+      ),
+  );
+
+  // ---- V2 Phase 5 — live diffs, opt-in (Req 5.1–5.5) -----------------------
+
+  // 27. share_diff
+  server.registerTool(
+    "share_diff",
+    {
+      description:
+        "Share your current change diff for a path with the team (opt-in; only " +
+        "works when the team enabled liveDiffs). Omit patch to clear a shared " +
+        "diff. This is the only tool that shares source-derived content.",
+      inputSchema: {
+        session: sessionSchema,
+        path: z.string(),
+        patch: z.string().optional(),
+      },
+    },
+    (args) =>
+      respond(
+        port,
+        port.shareDiff({
+          session: args.session,
+          path: args.path,
+          ...(args.patch !== undefined ? { patch: args.patch } : {}),
+        }),
+      ),
+  );
+
+  // 28. list_diffs
+  server.registerTool(
+    "list_diffs",
+    {
+      description:
+        "List the team's currently-shared Live_Diffs (read-only; empty unless " +
+        "the team enabled liveDiffs). Never applied to your files automatically.",
+      inputSchema: { session: sessionSchema },
+    },
+    (args) => respond(port, port.listDiffs({ session: args.session })),
   );
 
   return server;

@@ -31,9 +31,18 @@ import type {
   CoordinationUpdate,
   DependencyEdge,
   EdgeKind,
+  LiveDiffDto,
+  LivenessState,
+  LunaAction,
+  LunaReplyDto,
+  MessageDto,
+  MessageKind,
+  MessagePriority,
+  NotificationDto,
   RiskLevel,
   ScopeKind,
   SessionId,
+  TaskDto,
 } from "@cfls/protocol";
 
 import type {
@@ -275,6 +284,175 @@ export interface ProjectSessionStatusData {
   memberId: string;
 }
 
+// ---- V2 messaging (Phase 1; Req 1.1–1.4) -------------------------------------
+
+/** Send a directed/broadcast message, question, answer, or heads-up. */
+export interface SendMessageRequest {
+  session: SessionRef;
+  kind: MessageKind;
+  /** Required for `direct`/`question`/`answer`; omitted for `broadcast`/`heads_up`. */
+  toMemberId?: string;
+  /** Defaults to `normal` when omitted (Req 1.2). */
+  priority?: MessagePriority;
+  body: string;
+  /** Correlation id linking a `question` to its `answer` (Req 1.3). */
+  correlationId?: string;
+}
+
+export interface SendMessageData {
+  messageId: string;
+  eventRevision: number;
+}
+
+export interface ListMessagesRequest {
+  session: SessionRef;
+}
+
+export interface ListMessagesData {
+  /** Messages visible to the requesting member (sent by or addressed to it). */
+  messages: MessageDto[];
+  /** Count of messages addressed to the member that it has not read (Req 1.4). */
+  unreadCount: number;
+}
+
+export interface MarkMessageReadRequest {
+  messageId: string;
+}
+
+export interface MarkMessageReadData {
+  eventRevision: number;
+}
+
+export interface ListOpenQuestionsRequest {
+  session: SessionRef;
+}
+
+export interface ListOpenQuestionsData {
+  /** Unanswered questions addressed to the requesting member (Req 1.3). */
+  questions: MessageDto[];
+}
+
+// ---- V2 tasks (Phase 2; Req 2.1–2.3) ----------------------------------------
+
+/** Assign a task to a member (created in `proposed` status). */
+export interface AssignTaskRequest {
+  session: SessionRef;
+  title: string;
+  description: string;
+  /** The member whose Task_List the task targets. */
+  assigneeMemberId: string;
+}
+
+export interface AssignTaskData {
+  taskId: string;
+  eventRevision: number;
+}
+
+/** Assignee approves or rejects a proposed task (Req 2.2). */
+export interface RespondTaskRequest {
+  taskId: string;
+  accept: boolean;
+}
+
+export interface RespondTaskData {
+  eventRevision: number;
+}
+
+/** Assignee advances an accepted task (Req 2.3). */
+export interface UpdateTaskProgressRequest {
+  taskId: string;
+  status: "in_progress" | "done";
+}
+
+export interface UpdateTaskProgressData {
+  eventRevision: number;
+}
+
+export interface ListTasksRequest {
+  session: SessionRef;
+}
+
+export interface ListTasksData {
+  /** Every task in the session. */
+  tasks: TaskDto[];
+  /** The requesting member's accepted Task_List (accepted/in_progress/done). */
+  myTaskList: TaskDto[];
+  /** Proposed tasks awaiting the requesting member's approval (Req 2.2). */
+  incomingProposals: TaskDto[];
+}
+
+// ---- V2 liveness, notifications & wake (Phase 3; Req 3.1–3.3) ---------------
+
+export interface GetLivenessRequest {
+  session: SessionRef;
+}
+
+export interface GetLivenessData {
+  members: { memberId: string; state: LivenessState }[];
+}
+
+/** Ask an idle member to resume (delivered at its next action) (Req 3.3). */
+export interface WakeRequest {
+  session: SessionRef;
+  targetMemberId: string;
+  reason?: string;
+}
+
+export interface WakeData {
+  targetMemberId: string;
+}
+
+export interface GetNotificationsRequest {
+  session: SessionRef;
+}
+
+export interface GetNotificationsData {
+  notifications: NotificationDto[];
+}
+
+// ---- V2 Luna orchestrator (Phase 4; Req 4.1–4.5) ----------------------------
+
+/** Direct Luna to assign / arbitrate / answer / summarize (Req 4.2–4.4). */
+export interface AskLunaRequest {
+  session: SessionRef;
+  action: LunaAction;
+  prompt: string;
+  refId?: string;
+}
+
+/** Luna's reply, returned to the caller (Req 4.2–4.4). */
+export type AskLunaData = LunaReplyDto;
+
+// ---- V2 live diffs (Phase 5; Req 5.1–5.5) -----------------------------------
+
+/**
+ * Share (or clear) the current change diff for a path (opt-in) (Req 5.1–5.3).
+ * An empty/omitted `patch` clears any previously shared diff. When `patch` is
+ * omitted the agent computes a local git diff of the path in the
+ * Authorized_Folder; a client may also pass an explicit `patch`.
+ */
+export interface ShareDiffRequest {
+  session: SessionRef;
+  path: string;
+  /** Explicit unified-diff text; omitted ⇒ the agent computes it locally. */
+  patch?: string;
+}
+
+export interface ShareDiffData {
+  eventRevision: number;
+  /** True when a diff was shared; false when the share cleared/was empty. */
+  shared: boolean;
+}
+
+export interface ListDiffsRequest {
+  session: SessionRef;
+}
+
+export interface ListDiffsData {
+  /** Every currently-shared Live_Diff visible to the team (read-only) (Req 5.5). */
+  diffs: LiveDiffDto[];
+}
+
 /**
  * The interface the CoordinationAgent exposes to the Local_MCP_Server tools
  * (Task 9 implements it against the WSS agent + core-state; tests implement it
@@ -331,4 +509,55 @@ export interface AgentPort {
     req: SubscribeRequest,
     onUpdate?: (update: CoordinationUpdate) => void,
   ): MaybePromise<AgentResult<SubscribeData>>;
+
+  // V2 messaging (Phase 1; Req 1.1–1.4). `sendMessage`/`markMessageRead` are
+  // mutations (OFFLINE_QUEUED while offline); the `list*` reads succeed offline
+  // with possibly-stale data.
+  sendMessage(
+    req: SendMessageRequest,
+  ): MaybePromise<AgentResult<SendMessageData>>;
+  listMessages(
+    req: ListMessagesRequest,
+  ): MaybePromise<AgentResult<ListMessagesData>>;
+  markMessageRead(
+    req: MarkMessageReadRequest,
+  ): MaybePromise<AgentResult<MarkMessageReadData>>;
+  listOpenQuestions(
+    req: ListOpenQuestionsRequest,
+  ): MaybePromise<AgentResult<ListOpenQuestionsData>>;
+
+  // V2 tasks (Phase 2; Req 2.1–2.3). Assign/respond/progress are mutations
+  // (OFFLINE_QUEUED while offline); `listTasks` reads succeed offline.
+  assignTask(
+    req: AssignTaskRequest,
+  ): MaybePromise<AgentResult<AssignTaskData>>;
+  respondTask(
+    req: RespondTaskRequest,
+  ): MaybePromise<AgentResult<RespondTaskData>>;
+  updateTaskProgress(
+    req: UpdateTaskProgressRequest,
+  ): MaybePromise<AgentResult<UpdateTaskProgressData>>;
+  listTasks(req: ListTasksRequest): MaybePromise<AgentResult<ListTasksData>>;
+
+  // V2 liveness, notifications & wake (Phase 3; Req 3.1–3.3). `wake` is a
+  // mutation (OFFLINE_QUEUED while offline); the reads succeed offline.
+  getLiveness(
+    req: GetLivenessRequest,
+  ): MaybePromise<AgentResult<GetLivenessData>>;
+  wake(req: WakeRequest): MaybePromise<AgentResult<WakeData>>;
+  getNotifications(
+    req: GetNotificationsRequest,
+  ): MaybePromise<AgentResult<GetNotificationsData>>;
+
+  // V2 Luna orchestrator (Phase 4; Req 4.1–4.5).
+  askLuna(req: AskLunaRequest): MaybePromise<AgentResult<AskLunaData>>;
+
+  // V2 live diffs (Phase 5; Req 5.1–5.5). `shareDiff` is a mutation
+  // (OFFLINE_QUEUED while offline); `listDiffs` reads succeed offline.
+  shareDiff(
+    req: ShareDiffRequest,
+  ): MaybePromise<AgentResult<ShareDiffData>>;
+  listDiffs(
+    req: ListDiffsRequest,
+  ): MaybePromise<AgentResult<ListDiffsData>>;
 }

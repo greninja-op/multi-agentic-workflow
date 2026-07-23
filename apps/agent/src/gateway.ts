@@ -33,8 +33,17 @@ import type {
   IntentWithdrawPayload,
   LockAcquirePayload,
   LockReleasePayload,
+  DiffSharePayload,
+  LunaReplyDto,
+  LunaRequestPayload,
   MemberRef,
+  MessageReadPayload,
+  MessageSendPayload,
   SessionId,
+  TaskAssignPayload,
+  TaskProgressPayload,
+  TaskRespondPayload,
+  WakeRequestPayload,
 } from "@cfls/protocol";
 import type {
   ConnectionSnapshot,
@@ -50,7 +59,14 @@ export type MutationEvent =
   | { type: "lock.release"; payload: LockReleasePayload }
   | { type: "intent.declare"; payload: IntentDeclarePayload }
   | { type: "intent.update"; payload: IntentUpdatePayload }
-  | { type: "intent.withdraw"; payload: IntentWithdrawPayload };
+  | { type: "intent.withdraw"; payload: IntentWithdrawPayload }
+  | { type: "message.send"; payload: MessageSendPayload }
+  | { type: "message.read"; payload: MessageReadPayload }
+  | { type: "task.assign"; payload: TaskAssignPayload }
+  | { type: "task.respond"; payload: TaskRespondPayload }
+  | { type: "task.progress"; payload: TaskProgressPayload }
+  | { type: "wake.request"; payload: WakeRequestPayload }
+  | { type: "diff.share"; payload: DiffSharePayload };
 
 /** Outcome of transmitting a mutation to the host authority. */
 export type TransmitResult =
@@ -75,6 +91,14 @@ export interface HostGateway extends EventEmitter {
   online(): boolean;
   /** Forward a mutation to the host; `OFFLINE_QUEUED` while offline (Req 4.8). */
   transmit(event: MutationEvent): Promise<TransmitResult>;
+  /**
+   * Direct a request to Luna and await its reply (Phase 4; Req 4.2–4.5).
+   * Optional: only the real WSS gateway implements it; the in-process fan-in
+   * gateway used by unit tests does not orchestrate Luna.
+   */
+  askLuna?(
+    payload: LunaRequestPayload,
+  ): Promise<{ ok: true; reply: LunaReplyDto } | { ok: false; error: EnvelopeError }>;
 }
 
 function offlineError(type: string): TransmitResult {
@@ -103,6 +127,17 @@ export class RealHostGateway extends EventEmitter implements HostGateway {
     this.connection.on("update", (u: CoordinationUpdate) =>
       this.emit("update", u),
     );
+    // Relay V2 message updates (Phase 1) to the port's message view.
+    this.connection.on("message", (m: unknown) => this.emit("message", m));
+    // Relay V2 task updates (Phase 2) to the port's task view.
+    this.connection.on("task", (t: unknown) => this.emit("task", t));
+    // Relay V2 liveness + notifications (Phase 3) to the port's views.
+    this.connection.on("liveness", (l: unknown) => this.emit("liveness", l));
+    this.connection.on("notification", (n: unknown) =>
+      this.emit("notification", n),
+    );
+    // Relay V2 live-diff updates (Phase 5) to the port's diff view.
+    this.connection.on("diff", (d: unknown) => this.emit("diff", d));
   }
 
   getConnection(): ConnectionSnapshot {
@@ -139,6 +174,30 @@ export class RealHostGateway extends EventEmitter implements HostGateway {
         ? { lockConflict: result.acknowledgement.lockConflict }
         : {}),
     };
+  }
+
+  async askLuna(
+    payload: LunaRequestPayload,
+  ): Promise<
+    { ok: true; reply: LunaReplyDto } | { ok: false; error: EnvelopeError }
+  > {
+    if (!this.connection.isOnline()) {
+      return {
+        ok: false,
+        error: {
+          code: "OFFLINE_QUEUED",
+          message: "The CoordinationAgent is offline; Luna is unavailable.",
+        },
+      };
+    }
+    const result = await this.connection.requestLuna(payload);
+    if (!result.ok) {
+      return {
+        ok: false,
+        error: { code: "STORAGE_ERROR", message: result.message },
+      };
+    }
+    return { ok: true, reply: result.reply };
   }
 }
 
@@ -382,6 +441,17 @@ export class LocalHostGateway extends EventEmitter implements HostGateway {
       case "intent.update":
         return { updates: [] };
       case "intent.withdraw":
+        return { updates: [] };
+      case "message.send":
+      case "message.read":
+      case "task.assign":
+      case "task.respond":
+      case "task.progress":
+      case "wake.request":
+      case "diff.share":
+        // Messaging, tasks, wakes, and live diffs are delivered over the host's
+        // separate channels, not as CoordinationUpdates. The in-process gateway
+        // (used only by fan-in unit tests) records no coordination updates here.
         return { updates: [] };
     }
   }

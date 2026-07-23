@@ -21,9 +21,11 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   appendAdminPublicKey,
   DEFAULT_AUTO_SYNC,
+  DEFAULT_LIVE_DIFFS,
   readAgentConfig,
   readAutoSyncConfig,
   readHostConfig,
+  readLiveDiffsConfig,
   readLocalApiConfig,
   readTeamConfig,
   updateAgentConfig,
@@ -275,5 +277,41 @@ describe("config.json autoSync", () => {
     const path = join(dir, "config.json");
     writeFileSync(path, JSON.stringify({ autoSync: { enabled: true } }));
     expect(readAutoSyncConfig(path).enabled).toBe(true);
+  });
+});
+
+describe("config.json liveDiffs (Phase 5; Req 5.1, 5.4)", () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "cfls-cli-livediffs-"));
+  });
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("returns the disabled default when the file is absent", () => {
+    const path = join(dir, "config.json");
+    expect(readLiveDiffsConfig(path)).toEqual(DEFAULT_LIVE_DIFFS);
+    expect(readLiveDiffsConfig(path).enabled).toBe(false);
+  });
+
+  it("returns disabled when the liveDiffs block is absent", () => {
+    const path = join(dir, "config.json");
+    writeFileSync(path, JSON.stringify({ autoSync: { enabled: true } }));
+    expect(readLiveDiffsConfig(path).enabled).toBe(false);
+  });
+
+  it("enables only when enabled === true (boolean, not truthy)", () => {
+    const path = join(dir, "config.json");
+    writeFileSync(path, JSON.stringify({ liveDiffs: { enabled: "yes" } }));
+    expect(readLiveDiffsConfig(path).enabled).toBe(false);
+    writeFileSync(path, JSON.stringify({ liveDiffs: { enabled: true } }));
+    expect(readLiveDiffsConfig(path).enabled).toBe(true);
+  });
+
+  it("surfaces the liveDiffs block through readTeamConfig", () => {
+    const path = join(dir, "config.json");
+    writeFileSync(path, JSON.stringify({ liveDiffs: { enabled: true } }));
+    expect(readTeamConfig(path).liveDiffs).toEqual({ enabled: true });
   });
 });

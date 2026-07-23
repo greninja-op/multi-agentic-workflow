@@ -15,17 +15,32 @@
  */
 
 import type {
+  AskLunaData,
   ConnectionSnapshot,
   ConnectionStatusData,
+  GetLivenessData,
+  GetNotificationsData,
   GetRiskMapData,
   GetTeamStatusData,
+  ListDiffsData,
+  ListMessagesData,
+  ListTasksData,
   RiskEdge,
   StalenessSnapshot,
   TeamActivityFile,
   TeamActivityTask,
   TeamMemberActivity,
 } from "@cfls/mcp-server";
-import type { RiskLevel } from "@cfls/protocol";
+import type {
+  LivenessState,
+  LunaAction,
+  MessageKind,
+  MessagePriority,
+  NotifySeverity,
+  NotifySource,
+  RiskLevel,
+  TaskStatus,
+} from "@cfls/protocol";
 
 /** Indirect dependency risk for a path, with its explanation (Req 3.4, 22). */
 export interface IndirectRiskView {
@@ -83,12 +98,92 @@ export interface TeamPanelMember {
   tasks: TeamActivityTask[];
   /** Null for a roster-only, currently idle member. */
   lastEventRevision: number | null;
+  /** Fine-grained liveness (active/idle/gone) when known, else null (Req 3.1). */
+  liveness: LivenessState | null;
+}
+
+/**
+ * A rendered message for the extension's Messages section (V2 Phase 1; Req 1.1–1.4).
+ * `priority` drives styling (urgent highlighted); `answered` marks a resolved
+ * question. Body is team text only.
+ */
+export interface MessageView {
+  messageId: string;
+  kind: MessageKind;
+  senderMemberId: string;
+  toMemberId: string | null;
+  priority: MessagePriority;
+  body: string;
+  /** True/false for a question; null for non-question kinds. */
+  answered: boolean | null;
+  sentAt: string;
+}
+
+/** A rendered task for the extension's Tasks section (V2 Phase 2; Req 2.1–2.3). */
+export interface TaskView {
+  taskId: string;
+  title: string;
+  description: string;
+  assigneeMemberId: string;
+  assignerMemberId: string;
+  status: TaskStatus;
+}
+
+/** A rendered notification for the extension (V2 Phase 3; Req 3.2). */
+export interface NotificationView {
+  notificationId: string;
+  severity: NotifySeverity;
+  source: NotifySource;
+  summary: string;
+  refId: string;
+}
+
+/**
+ * A shared Live_Diff rendered for the extension's read-only diff view (V2
+ * Phase 5; Req 5.5). It is display-only — the extension NEVER applies a received
+ * diff to the recipient's files automatically. Empty unless the team opted in.
+ */
+export interface LiveDiffView {
+  path: string;
+  memberId: string;
+  patch: string;
+}
+
+/**
+ * Luna's most recent reply, rendered for the extension's Luna panel (V2 Phase 4;
+ * Req 4.5). Read-only summary of a decision, answer, or team summary.
+ */
+export interface LunaReplyView {
+  action: LunaAction;
+  summary: string;
+  /** The task Luna produced (e.g. from an `assign`), when any. */
+  producedTaskId: string | null;
+  /** The message Luna produced (e.g. an `answer`/arbitration notice), when any. */
+  producedMessageId: string | null;
 }
 
 /** The full rendered coordination view for a Repository_Session. */
 export interface CoordinationViewModel {
   paths: PathView[];
   plannedFileCreations: PlannedCreationView[];
+  /** Messages visible to this member, oldest first (V2 Phase 1). */
+  messages: MessageView[];
+  /** Count of messages addressed to this member that it has not read (Req 1.4). */
+  unreadCount: number;
+  /** This member's accepted task list (accepted/in_progress/done) (V2 Phase 2). */
+  myTasks: TaskView[];
+  /** Proposed tasks awaiting this member's approval (Req 2.2). */
+  incomingTasks: TaskView[];
+  /** All tasks in the session. */
+  allTasks: TaskView[];
+  /** This member's notifications, oldest first (V2 Phase 3; Req 3.2). */
+  notifications: NotificationView[];
+  /** Count of urgent notifications (drives a sound cue) (Req 3.2). */
+  urgentNotificationCount: number;
+  /** Luna's most recent reply, or null when Luna has not been asked (V2 Phase 4; Req 4.5). */
+  lunaLastReply: LunaReplyView | null;
+  /** Read-only shared Live_Diffs; empty unless the team opted in (V2 Phase 5; Req 5.5). */
+  liveDiffs: LiveDiffView[];
   /** True while the local agent is in Offline_State (Req 3.6, 33.3). */
   offline: boolean;
   /** True when served coordination data may be stale (Req 33.2, 33.3). */
@@ -110,6 +205,18 @@ export interface CoordinationSnapshot {
   teamStatus?: GetTeamStatusData;
   /** Optional live roster; supplied independently of activity snapshots. */
   connectionStatus?: ConnectionStatusData;
+  /** Optional messaging projection from `list_messages` (V2 Phase 1). */
+  messages?: ListMessagesData;
+  /** Optional task projection from `list_tasks` (V2 Phase 2). */
+  tasks?: ListTasksData;
+  /** Optional liveness projection from `get_liveness` (V2 Phase 3). */
+  liveness?: GetLivenessData;
+  /** Optional notifications projection from `get_notifications` (V2 Phase 3). */
+  notifications?: GetNotificationsData;
+  /** Optional last Luna reply from `ask_luna` (V2 Phase 4; Req 4.5). */
+  luna?: AskLunaData;
+  /** Optional shared Live_Diffs from `list_diffs` (V2 Phase 5; Req 5.5). */
+  diffs?: ListDiffsData;
   /** Known from the local Repository_Session before activity is available. */
   teamId?: string;
   connection: ConnectionSnapshot;
@@ -198,7 +305,12 @@ function mergeTeamMembers(
   teamStatus: GetTeamStatusData | undefined,
   connectionStatus: ConnectionStatusData | undefined,
   forceOffline: boolean,
+  liveness: GetLivenessData | undefined,
 ): TeamPanelMember[] {
+  const livenessByMember = new Map<string, LivenessState>();
+  for (const entry of liveness?.members ?? []) {
+    livenessByMember.set(entry.memberId, entry.state);
+  }
   const activityByMember = new Map<string, TeamMemberActivity>();
   for (const activity of teamStatus?.members ?? []) {
     if (activity.memberId !== "") {
@@ -253,6 +365,7 @@ function mergeTeamMembers(
         files: activity?.files ?? [],
         tasks: activity?.tasks ?? [],
         lastEventRevision: activity?.lastEventRevision ?? null,
+        liveness: livenessByMember.get(memberId) ?? null,
       };
     })
     .sort(
@@ -325,11 +438,69 @@ export function buildCoordinationViewModel(
     };
   });
 
+  const messages: MessageView[] = (snapshot.messages?.messages ?? []).map(
+    (m) => ({
+      messageId: m.messageId,
+      kind: m.kind,
+      senderMemberId: m.sender.memberId,
+      toMemberId: m.toMemberId ?? null,
+      priority: m.priority,
+      body: m.body,
+      answered: m.kind === "question" ? (m.answered ?? false) : null,
+      sentAt: m.sentAt,
+    }),
+  );
+
+  const toTaskView = (t: {
+    taskId: string;
+    title: string;
+    description: string;
+    assignee: { memberId: string };
+    assigner: { memberId: string };
+    status: TaskStatus;
+  }): TaskView => ({
+    taskId: t.taskId,
+    title: t.title,
+    description: t.description,
+    assigneeMemberId: t.assignee.memberId,
+    assignerMemberId: t.assigner.memberId,
+    status: t.status,
+  });
+
   return {
     paths,
     plannedFileCreations: snapshot.riskMap.plannedFileCreations.map((p) => ({
       path: p.path,
       memberId: p.memberId,
+    })),
+    messages,
+    unreadCount: snapshot.messages?.unreadCount ?? 0,
+    myTasks: (snapshot.tasks?.myTaskList ?? []).map(toTaskView),
+    incomingTasks: (snapshot.tasks?.incomingProposals ?? []).map(toTaskView),
+    allTasks: (snapshot.tasks?.tasks ?? []).map(toTaskView),
+    notifications: (snapshot.notifications?.notifications ?? []).map((n) => ({
+      notificationId: n.notificationId,
+      severity: n.severity,
+      source: n.source,
+      summary: n.summary,
+      refId: n.refId,
+    })),
+    urgentNotificationCount: (snapshot.notifications?.notifications ?? []).filter(
+      (n) => n.severity === "urgent",
+    ).length,
+    lunaLastReply:
+      snapshot.luna !== undefined
+        ? {
+            action: snapshot.luna.action,
+            summary: snapshot.luna.summary,
+            producedTaskId: snapshot.luna.producedTaskId ?? null,
+            producedMessageId: snapshot.luna.producedMessageId ?? null,
+          }
+        : null,
+    liveDiffs: (snapshot.diffs?.diffs ?? []).map((d) => ({
+      path: d.path,
+      memberId: d.member.memberId,
+      patch: d.patch,
     })),
     offline,
     stale,
@@ -340,6 +511,7 @@ export function buildCoordinationViewModel(
       snapshot.teamStatus,
       snapshot.connectionStatus,
       offline,
+      snapshot.liveness,
     ),
   };
 }

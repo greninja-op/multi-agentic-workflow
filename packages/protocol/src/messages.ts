@@ -23,8 +23,18 @@ import type {
   RiskLevel,
   ScopeKind,
   CoordinationUpdate,
+  MessageDto,
+  MessageKind,
+  MessagePriority,
+  TaskDto,
+  LivenessState,
+  NotificationDto,
+  LunaRequestDto,
+  LunaReplyDto,
+  LiveDiffDto,
 } from "./models";
 import type { ErrorCode } from "./errors";
+// NotificationDto is referenced by SessionStateSnapshot and NotifyPushPayload.
 
 // ---------------------------------------------------------------------------
 // Message-type constants (design §4.3)
@@ -134,6 +144,65 @@ export const EventMessageType = {
   EVENT_APPLIED: "event.applied",
 } as const;
 
+/** V2 messaging message types (Phase 1; Req 1.1–1.4). */
+export const MessagingMessageType = {
+  /** C→H: send a directed/broadcast message, question, answer, or heads-up. */
+  SEND: "message.send",
+  /** H→C: broadcast of a message (added) or its updated state (answered/read). */
+  UPDATE: "message.update",
+  /** C→H: mark a delivered message as read. */
+  READ: "message.read",
+} as const;
+
+/** V2 task message types (Phase 2; Req 2.1–2.3). */
+export const TaskMessageType = {
+  /** C→H: assign a new task (proposed) to a member. */
+  ASSIGN: "task.assign",
+  /** C→H: assignee approves or rejects an incoming proposed task. */
+  RESPOND: "task.respond",
+  /** C→H: assignee reports progress (in_progress | done). */
+  PROGRESS: "task.progress",
+  /** C→H: assigner or assignee withdraws a task. */
+  WITHDRAW: "task.withdraw",
+  /** H→C: broadcast of the authoritative task state. */
+  UPDATE: "task.update",
+} as const;
+
+/** V2 notifications, liveness & wake message types (Phase 3; Req 3.1–3.3). */
+export const PresenceLivenessMessageType = {
+  /** H→C: a member's active/idle/gone liveness changed. */
+  LIVENESS_UPDATE: "liveness.update",
+  /** C→H: ask an idle member to resume (delivered at its next action). */
+  WAKE_REQUEST: "wake.request",
+  /** H→C: a severity-tagged notification for a recipient. */
+  NOTIFY_PUSH: "notify.push",
+} as const;
+
+/**
+ * V2 Luna orchestrator message types (Phase 4; Req 4.1–4.5). The `ASK`/`REPLY`
+ * key names avoid colliding with the shared `REQUEST` key (`sync.request`) in
+ * the flattened {@link MessageType} convenience map; the wire strings are
+ * `luna.request` / `luna.reply`.
+ */
+export const LunaMessageType = {
+  /** C→H: a human directs Luna to assign/arbitrate/answer/summarize. */
+  ASK: "luna.request",
+  /** H→C: Luna's structured reply to the requester. */
+  REPLY: "luna.reply",
+} as const;
+
+/**
+ * V2 live-diff message types (Phase 5; Req 5.1–5.5). Opt-in, off by default —
+ * the only V2 family that moves source-derived content. `diff.share` /
+ * `diff.update`.
+ */
+export const DiffMessageType = {
+  /** C→H: (opt-in) share the current change diff for a path. */
+  SHARE: "diff.share",
+  /** H→C: broadcast a shared Live_Diff or its removal. */
+  UPDATE: "diff.update",
+} as const;
+
 /** Error message type (§11.1, §11.2). */
 export const ErrorMessageType = {
   /** H→C: typed error carrying an ErrorCode. */
@@ -153,6 +222,22 @@ export const MessageType = {
   ...PathMessageType,
   ...HeartbeatMessageType,
   ...SyncMessageType,
+  // NOTE: MessagingMessageType is spread BEFORE BroadcastMessageType so the
+  // shared `UPDATE` key still resolves to `coordination.update` in this
+  // convenience map (the messaging `UPDATE` is `message.update`; consumers use
+  // the MessagingMessageType const directly). MESSAGE_TYPES below is the lossless
+  // catalog and includes every messaging wire string.
+  ...MessagingMessageType,
+  // TaskMessageType is likewise spread before BroadcastMessageType so the shared
+  // `UPDATE` key still resolves to `coordination.update` in this convenience map.
+  ...TaskMessageType,
+  ...PresenceLivenessMessageType,
+  ...LunaMessageType,
+  // DiffMessageType is spread before BroadcastMessageType so its shared `UPDATE`
+  // key still resolves to `coordination.update` in this convenience map (the
+  // diff `UPDATE` is `diff.update`; consumers use the DiffMessageType const
+  // directly). MESSAGE_TYPES below is the lossless catalog with every wire string.
+  ...DiffMessageType,
   ...BroadcastMessageType,
   ...EventMessageType,
   ...ErrorMessageType,
@@ -170,6 +255,11 @@ export type MessageTypeName =
   | (typeof SyncMessageType)[keyof typeof SyncMessageType]
   | (typeof BroadcastMessageType)[keyof typeof BroadcastMessageType]
   | (typeof EventMessageType)[keyof typeof EventMessageType]
+  | (typeof MessagingMessageType)[keyof typeof MessagingMessageType]
+  | (typeof TaskMessageType)[keyof typeof TaskMessageType]
+  | (typeof PresenceLivenessMessageType)[keyof typeof PresenceLivenessMessageType]
+  | (typeof LunaMessageType)[keyof typeof LunaMessageType]
+  | (typeof DiffMessageType)[keyof typeof DiffMessageType]
   | (typeof ErrorMessageType)[keyof typeof ErrorMessageType];
 
 /**
@@ -194,6 +284,11 @@ export const MESSAGE_TYPES: readonly MessageTypeName[] = [
   ...Object.values(SyncMessageType),
   ...Object.values(BroadcastMessageType),
   ...Object.values(EventMessageType),
+  ...Object.values(MessagingMessageType),
+  ...Object.values(TaskMessageType),
+  ...Object.values(PresenceLivenessMessageType),
+  ...Object.values(LunaMessageType),
+  ...Object.values(DiffMessageType),
   ...Object.values(ErrorMessageType),
 ] as MessageTypeName[];
 
@@ -439,6 +534,30 @@ export interface SessionStateSnapshot {
   locks: Lock[];
   presence: Presence[];
   intents: DeclaredIntent[];
+  /**
+   * V2 messaging history for the session (Phase 1; Req 1.4, X.2). Optional for
+   * wire back-compatibility with V1 snapshots; when present, a reconnecting
+   * agent restores it so messages sent while it was offline are delivered.
+   */
+  messages?: MessageDto[];
+  /**
+   * V2 tasks for the session (Phase 2; Req 2.1, X.2). Optional for wire
+   * back-compatibility; when present, a reconnecting agent restores the task
+   * list and any pending approvals.
+   */
+  tasks?: TaskDto[];
+  /**
+   * V2 notifications for the session (Phase 3; Req 3.2, X.2). Optional; when
+   * present, a reconnecting agent restores its notifications and pending wakes.
+   */
+  notifications?: NotificationDto[];
+  /**
+   * V2 opt-in Live_Diffs for the session (Phase 5; Req 5.1–5.3, X.2). Optional
+   * and present only when Live_Diff sharing is enabled; when present, a
+   * reconnecting agent restores the currently-shared diffs. This is the only
+   * snapshot field that carries source-derived content.
+   */
+  diffs?: LiveDiffDto[];
   highestRevision: number;
 }
 
@@ -505,6 +624,122 @@ export interface ErrorPayload {
 }
 
 // ---------------------------------------------------------------------------
+// V2 messaging payloads (Phase 1; Req 1.1-1.4)
+// ---------------------------------------------------------------------------
+
+/** `message.send` (C→H). The host assigns messageId (=Event_ID), revision, sentAt. */
+export interface MessageSendPayload {
+  kind: MessageKind;
+  /** Required for `direct`/`question`/`answer`; omitted for `broadcast`/`heads_up`. */
+  toMemberId?: string;
+  /** Defaults to `normal` when omitted (Req 1.2). */
+  priority?: MessagePriority;
+  body: string;
+  /** Correlates an `answer` to its `question` (Req 1.3). */
+  correlationId?: string;
+}
+
+/** `message.update` (H→C) — the authoritative message state. */
+export interface MessageUpdatePayload {
+  op: "added" | "updated";
+  message: MessageDto;
+}
+
+/** `message.read` (C→H) — mark a delivered message read (Req 1.4). */
+export interface MessageReadPayload {
+  messageId: string;
+}
+
+// ---------------------------------------------------------------------------
+// V2 task payloads (Phase 2; Req 2.1-2.3)
+// ---------------------------------------------------------------------------
+
+/** `task.assign` (C→H). The host assigns taskId (=Event_ID), assigner=sender. */
+export interface TaskAssignPayload {
+  title: string;
+  description: string;
+  /** The member whose Task_List the task targets. */
+  assigneeMemberId: string;
+}
+
+/** `task.respond` (C→H) — assignee approves or rejects a proposed task (Req 2.2). */
+export interface TaskRespondPayload {
+  taskId: string;
+  /** True to accept (→ accepted), false to reject (→ rejected). */
+  accept: boolean;
+}
+
+/** `task.progress` (C→H) — assignee advances a task's status (Req 2.3). */
+export interface TaskProgressPayload {
+  taskId: string;
+  status: "in_progress" | "done";
+}
+
+/** `task.withdraw` (C→H) — assigner or assignee withdraws a task (Req 2.2). */
+export interface TaskWithdrawPayload {
+  taskId: string;
+}
+
+/** `task.update` (H→C) — the authoritative task state. */
+export interface TaskUpdatePayload {
+  op: "added" | "updated" | "removed";
+  task: TaskDto;
+}
+
+// ---------------------------------------------------------------------------
+// V2 notifications, liveness & wake payloads (Phase 3; Req 3.1-3.3)
+// ---------------------------------------------------------------------------
+
+/** `liveness.update` (H→C) — a member's liveness changed (Req 3.1). */
+export interface LivenessUpdatePayload {
+  memberId: string;
+  state: LivenessState;
+  eventRevision: number;
+}
+
+/** `wake.request` (C→H) — ask an idle member to resume (Req 3.3). */
+export interface WakeRequestPayload {
+  /** The member to wake. */
+  targetMemberId: string;
+  /** Optional short team-text reason. */
+  reason?: string;
+}
+
+/** `notify.push` (H→C) — a severity-tagged notification for a recipient (Req 3.2). */
+export type NotifyPushPayload = NotificationDto;
+
+// ---------------------------------------------------------------------------
+// V2 Luna orchestrator payloads (Phase 4; Req 4.1-4.5)
+// ---------------------------------------------------------------------------
+
+/** `luna.request` (C→H) — a human directs Luna. */
+export type LunaRequestPayload = LunaRequestDto;
+
+/** `luna.reply` (H→C) — Luna's structured reply. */
+export type LunaReplyPayload = LunaReplyDto;
+
+// ---------------------------------------------------------------------------
+// V2 live-diff payloads (Phase 5; Req 5.1-5.5)
+// ---------------------------------------------------------------------------
+
+/**
+ * `diff.share` (C→H) — (opt-in) share the current change diff for a path. The
+ * host stamps member=sender and eventRevision. An empty `patch` clears any
+ * previously shared diff for the path.
+ */
+export interface DiffSharePayload {
+  path: string;
+  /** Unified-diff text, data-minimized; empty string removes the shared diff. */
+  patch: string;
+}
+
+/** `diff.update` (H→C) — the authoritative shared Live_Diff, or its removal. */
+export interface DiffUpdatePayload {
+  op: "shared" | "removed";
+  diff: LiveDiffDto;
+}
+
+// ---------------------------------------------------------------------------
 // Type-level payload map — associates each message type with its payload
 // ---------------------------------------------------------------------------
 
@@ -556,6 +791,26 @@ export interface MessagePayloadMap {
   [BroadcastMessageType.PARTICIPANTS]: ParticipantsUpdatePayload;
 
   [EventMessageType.EVENT_APPLIED]: EventAppliedPayload;
+
+  [MessagingMessageType.SEND]: MessageSendPayload;
+  [MessagingMessageType.UPDATE]: MessageUpdatePayload;
+  [MessagingMessageType.READ]: MessageReadPayload;
+
+  [TaskMessageType.ASSIGN]: TaskAssignPayload;
+  [TaskMessageType.RESPOND]: TaskRespondPayload;
+  [TaskMessageType.PROGRESS]: TaskProgressPayload;
+  [TaskMessageType.WITHDRAW]: TaskWithdrawPayload;
+  [TaskMessageType.UPDATE]: TaskUpdatePayload;
+
+  [PresenceLivenessMessageType.LIVENESS_UPDATE]: LivenessUpdatePayload;
+  [PresenceLivenessMessageType.WAKE_REQUEST]: WakeRequestPayload;
+  [PresenceLivenessMessageType.NOTIFY_PUSH]: NotifyPushPayload;
+
+  [LunaMessageType.ASK]: LunaRequestPayload;
+  [LunaMessageType.REPLY]: LunaReplyPayload;
+
+  [DiffMessageType.SHARE]: DiffSharePayload;
+  [DiffMessageType.UPDATE]: DiffUpdatePayload;
 
   [ErrorMessageType.ERROR]: ErrorPayload;
 }

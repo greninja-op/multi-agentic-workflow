@@ -19,8 +19,12 @@
 import {
   AgentSyncCache,
   buildRiskMap,
+  DiffRegistry,
+  MessageRegistry,
+  NotificationRegistry,
   normalizePath,
   resolveMode,
+  TaskRegistry,
   type RepositoryRulesConfig,
   type SyncResponse,
 } from "@cfls/core-state";
@@ -28,12 +32,17 @@ import type {
   CoordinationUpdate,
   DeclaredIntent,
   DependencyGraph,
+  LiveDiffDto,
+  LivenessState,
   Lock,
   MemberRef,
+  MessageDto,
+  NotificationDto,
   Presence,
   RiskMapEntry,
   SessionId,
   SessionStateSnapshot,
+  TaskDto,
 } from "@cfls/protocol";
 
 /** A planned-file-creation surfaced in the Risk_Map (design §3.4 #1). */
@@ -71,10 +80,144 @@ export interface TeamMemberActivity {
  */
 export class AgentView {
   private readonly cache = new AgentSyncCache();
+  /** V2 messaging view (Phase 1), fed by host `message.update` broadcasts. */
+  private readonly messages = new MessageRegistry();
+  /** V2 task view (Phase 2), fed by host `task.update` broadcasts. */
+  private readonly tasks = new TaskRegistry();
+  /** V2 notification view (Phase 3), fed by host `notify.push`. */
+  private readonly notifications = new NotificationRegistry();
+  /** V2 live-diff view (Phase 5), fed by host `diff.update` broadcasts. */
+  private readonly diffs = new DiffRegistry();
+  /** V2 liveness view (Phase 3): `session_key` → memberId → state. */
+  private readonly liveness = new Map<string, Map<string, LivenessState>>();
 
   /** Apply a single host broadcast to the view (idempotent by revision). */
   applyUpdate(session: SessionId, update: CoordinationUpdate): void {
     this.cache.applyEvents(session, [update]);
+  }
+
+  // ---- V2 messaging (Phase 1; Req 1.1–1.4) ---------------------------------
+
+  /** Apply a host `message.update` (added/updated) to the message view. */
+  applyMessage(session: SessionId, message: MessageDto): void {
+    this.messages.upsert(session, message);
+  }
+
+  /** Locally mark a message read for `memberId` (also sent to the host). */
+  markMessageReadLocal(
+    session: SessionId,
+    messageId: string,
+    memberId: string,
+  ): void {
+    this.messages.markRead(session, messageId, memberId);
+  }
+
+  /** Messages visible to `memberId` (sent by or addressed to it). */
+  messagesForMember(session: SessionId, memberId: string): MessageDto[] {
+    return this.messages.messagesFor(session, memberId);
+  }
+
+  /** Count of messages addressed to `memberId` that it has not read (Req 1.4). */
+  unreadForMember(session: SessionId, memberId: string): number {
+    return this.messages.unreadCountFor(session, memberId);
+  }
+
+  /** Unanswered questions addressed to `memberId` (Req 1.3). */
+  openQuestionsForMember(session: SessionId, memberId: string): MessageDto[] {
+    return this.messages.openQuestionsFor(session, memberId);
+  }
+
+  /** Restore the message view from a snapshot's messages (reconnect, Req X.2). */
+  loadMessages(
+    session: SessionId,
+    messages: readonly MessageDto[],
+  ): void {
+    this.messages.restore(session, messages);
+  }
+
+  // ---- V2 tasks (Phase 2; Req 2.1–2.3) -------------------------------------
+
+  /** Apply a host `task.update` (added/updated) to the task view. */
+  applyTask(session: SessionId, task: TaskDto): void {
+    this.tasks.upsert(session, task);
+  }
+
+  /** Every task in the session (ordered by eventRevision). */
+  allTasks(session: SessionId): TaskDto[] {
+    return this.tasks.allTasks(session);
+  }
+
+  /** `memberId`'s accepted Task_List (accepted/in_progress/done). */
+  taskListForMember(session: SessionId, memberId: string): TaskDto[] {
+    return this.tasks.taskListFor(session, memberId);
+  }
+
+  /** Proposed tasks awaiting `memberId`'s approval (Req 2.2). */
+  incomingProposalsForMember(
+    session: SessionId,
+    memberId: string,
+  ): TaskDto[] {
+    return this.tasks.incomingProposalsFor(session, memberId);
+  }
+
+  // ---- V2 liveness & notifications (Phase 3; Req 3.1–3.3) ------------------
+
+  /** Apply a host `liveness.update` to the liveness view. */
+  applyLiveness(
+    session: SessionId,
+    memberId: string,
+    state: LivenessState,
+  ): void {
+    const key = `${session.repoId}\u0000${session.teamId}\u0000${session.branch}`;
+    let states = this.liveness.get(key);
+    if (states === undefined) {
+      states = new Map();
+      this.liveness.set(key, states);
+    }
+    states.set(memberId, state);
+  }
+
+  /** Current liveness states for a session (sorted by memberId). */
+  livenessStates(
+    session: SessionId,
+  ): { memberId: string; state: LivenessState }[] {
+    const key = `${session.repoId}\u0000${session.teamId}\u0000${session.branch}`;
+    const states = this.liveness.get(key);
+    if (states === undefined) {
+      return [];
+    }
+    return [...states.entries()]
+      .map(([memberId, state]) => ({ memberId, state }))
+      .sort((a, b) => a.memberId.localeCompare(b.memberId));
+  }
+
+  /** Apply a host `notify.push` to the notification view. */
+  applyNotification(session: SessionId, notification: NotificationDto): void {
+    this.notifications.add(session, notification);
+  }
+
+  /** Notifications addressed to `memberId` (Req 3.2). */
+  notificationsForMember(
+    session: SessionId,
+    memberId: string,
+  ): NotificationDto[] {
+    return this.notifications.forMember(session, memberId);
+  }
+
+  // ---- V2 live diffs (Phase 5; Req 5.1–5.3) --------------------------------
+
+  /** Apply a host `diff.update` (shared/removed) to the live-diff view. */
+  applyDiff(session: SessionId, op: "shared" | "removed", diff: LiveDiffDto): void {
+    if (op === "removed") {
+      this.diffs.remove(session, diff.member.memberId, diff.path);
+      return;
+    }
+    this.diffs.share(session, diff);
+  }
+
+  /** Every currently-shared Live_Diff in the session (Req 5.5). */
+  allDiffs(session: SessionId): LiveDiffDto[] {
+    return this.diffs.allDiffs(session);
   }
 
   /** Apply a batch of host broadcasts to the view. */
@@ -88,11 +231,24 @@ export class AgentView {
   /** Apply a reconnect {@link SyncResponse}, converging + clearing staleness. */
   applySync(session: SessionId, response: SyncResponse): void {
     this.cache.applySync(session, response);
+    // A snapshot fallback carries the full message history; restore it so
+    // messages sent while offline are delivered (Req X.2). Incremental syncs
+    // deliver missed messages over the separate message channel instead.
+    if (response.kind === "snapshot") {
+      this.messages.restore(session, response.snapshot.messages ?? []);
+      this.tasks.restore(session, response.snapshot.tasks ?? []);
+      this.notifications.restore(session, response.snapshot.notifications ?? []);
+      this.diffs.restore(session, response.snapshot.diffs ?? []);
+    }
   }
 
   /** Seed the view from a locally-cached snapshot (offline start, Req 35.4). */
   loadSnapshot(session: SessionId, snapshot: SessionStateSnapshot): void {
     this.cache.applySnapshot(session, snapshot);
+    this.messages.restore(session, snapshot.messages ?? []);
+    this.tasks.restore(session, snapshot.tasks ?? []);
+    this.notifications.restore(session, snapshot.notifications ?? []);
+    this.diffs.restore(session, snapshot.diffs ?? []);
   }
 
   /** Mark the view stale on connectivity loss (Req 33.2). */

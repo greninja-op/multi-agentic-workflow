@@ -22,10 +22,13 @@ import type {
   SessionId,
 } from "@cfls/protocol";
 
+import { DiffRegistry } from "./diffs";
 import { IntentRegistry } from "./intents";
 import { LockRegistry } from "./locks";
+import { MessageRegistry } from "./messaging";
 import { PresenceRegistry } from "./presence";
 import { RevisionCounter } from "./revisions";
+import { TaskRegistry } from "./tasks";
 import {
   restoreSessionState,
   type SessionRegistries,
@@ -349,5 +352,116 @@ describe("revision-counter restore (Req 1.6)", () => {
       ...snapshot.presence.map((p) => p.eventRevision),
     );
     expect(nextRevision).toBeGreaterThan(persistedMax);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// V2 Phase 1 — messaging in the snapshot (Req 1.4, X.2)
+// ---------------------------------------------------------------------------
+
+describe("snapshot — V2 messaging round-trip", () => {
+  it("captures and restores messages, resuming the counter above their revision", () => {
+    const source: SessionRegistries = { ...fresh(), messages: new MessageRegistry() };
+    const rev = source.revisions.next(session); // 1
+    source.messages!.append({
+      session,
+      messageId: "m-1",
+      kind: "direct",
+      sender: alice,
+      toMemberId: "u-bob",
+      priority: "urgent",
+      body: "check payments.ts",
+      eventRevision: rev,
+      sentAt: "2024-01-01T00:00:00Z",
+    });
+
+    const snapshot = serializeSessionState(session, source);
+    expect(snapshot.messages?.map((m) => m.messageId)).toEqual(["m-1"]);
+
+    const target: SessionRegistries = { ...fresh(), messages: new MessageRegistry() };
+    restoreSessionState(snapshot, target);
+
+    expect(target.messages!.allMessages(session).map((m) => m.messageId)).toEqual(["m-1"]);
+    // bob still sees it as unread after restore.
+    expect(target.messages!.unreadCountFor(session, "u-bob")).toBe(1);
+    // the counter resumed above the message revision.
+    expect(target.revisions.next(session)).toBeGreaterThan(rev);
+  });
+
+  it("omits the messages field entirely when no message registry is provided (V1 back-compat)", () => {
+    const snapshot = serializeSessionState(session, fresh());
+    expect(snapshot.messages).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// V2 Phase 2 — tasks in the snapshot (Req 2.1, X.2)
+// ---------------------------------------------------------------------------
+
+describe("snapshot — V2 tasks round-trip", () => {
+  it("captures and restores tasks, resuming the counter above their revision", () => {
+    const source: SessionRegistries = { ...fresh(), tasks: new TaskRegistry() };
+    const rev = source.revisions.next(session); // 1
+    source.tasks!.assign({
+      session,
+      taskId: "t-1",
+      title: "Add logout",
+      description: "…",
+      assignee: bob,
+      assigner: alice,
+      eventRevision: rev,
+    });
+    source.tasks!.respond({
+      session,
+      taskId: "t-1",
+      requester: bob,
+      accept: true,
+      eventRevision: source.revisions.next(session),
+    });
+
+    const snapshot = serializeSessionState(session, source);
+    expect(snapshot.tasks?.map((t) => t.taskId)).toEqual(["t-1"]);
+
+    const target: SessionRegistries = { ...fresh(), tasks: new TaskRegistry() };
+    restoreSessionState(snapshot, target);
+    expect(target.tasks!.taskListFor(session, "u-bob").map((t) => t.status)).toEqual([
+      "accepted",
+    ]);
+    expect(target.revisions.next(session)).toBeGreaterThan(rev);
+  });
+
+  it("omits the tasks field when no task registry is provided (V1 back-compat)", () => {
+    const snapshot = serializeSessionState(session, fresh());
+    expect(snapshot.tasks).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// V2 Phase 5 — live diffs in the snapshot (Req 5.1–5.3, X.2)
+// ---------------------------------------------------------------------------
+
+describe("snapshot — V2 live-diffs round-trip", () => {
+  it("captures and restores shared diffs, resuming the counter above their revision", () => {
+    const source: SessionRegistries = { ...fresh(), diffs: new DiffRegistry() };
+    const rev = source.revisions.next(session); // 1
+    source.diffs!.share(session, {
+      path: "src/api.ts",
+      member: alice,
+      patch: "@@ -1 +1 @@\n-old\n+new",
+      eventRevision: rev,
+    });
+
+    const snapshot = serializeSessionState(session, source);
+    expect(snapshot.diffs?.map((d) => d.path)).toEqual(["src/api.ts"]);
+
+    const target: SessionRegistries = { ...fresh(), diffs: new DiffRegistry() };
+    restoreSessionState(snapshot, target);
+    expect(target.diffs!.get(session, "u-alice", "src/api.ts")?.patch).toContain("+new");
+    expect(target.revisions.next(session)).toBeGreaterThan(rev);
+  });
+
+  it("omits the diffs field when no diff registry is provided (opt-in off)", () => {
+    const snapshot = serializeSessionState(session, fresh());
+    expect(snapshot.diffs).toBeUndefined();
   });
 });

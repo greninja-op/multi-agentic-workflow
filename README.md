@@ -168,11 +168,35 @@ CFLS is a host-based MVP, not a peer-to-peer or serverless system. The table bel
 | Per-device identity, signed invitations, revocation, and rotation                                  | Broader protected-path and hard-stop workflows                                     |
 | Editor activity, live presence, soft coordination signals, and a read-only Host dashboard          | Production deployment guidance beyond a properly configured Host, TLS, and backups |
 | Clickable VS Code / Kiro CFLS status item with live team roster plus active task and file metadata | Additional editor integrations and presentation refinements                        |
-| MCP stdio bridge (`cfls mcp`) with the 13-tool coordination surface, including `get_team_status`   | Further coding-agent client integrations                                           |
+| MCP stdio bridge (`cfls mcp`) with the coordination + V2 collaboration tool surface, including `get_team_status` | Further coding-agent client integrations                                           |
 | Per-user Agent service install on Linux (`systemd --user`) and Windows (Task Scheduler)            | Distribution and fleet-management refinements                                      |
 | Offline cached state with clear staleness                                                          |                                                                                    |
 
 Optional Git synchronization exists as a separate, opt-in layer; it is disabled by default and does not change the fact that Git owns source content and real conflict resolution.
+
+## V2 collaboration layer
+
+Building on the coordination MVP, CFLS V2 adds a collaboration layer so teammates
+and their AI agents can not only *see* overlapping work but *act on it together*.
+Every V2 capability is built on the same authority, identity, ordering, and
+persistence guarantees as V1, is exercised by unit/property/integration tests and
+a multi-agent simulation, and is exposed to coding agents as MCP tools. The
+metadata-only principle is preserved everywhere except the explicitly opt-in live
+diffs feature.
+
+| V2 capability | What it adds | MCP tools |
+| --- | --- | --- |
+| **Messaging** | Directed and broadcast messages, questions/answers correlated by id, priority (fyi/normal/urgent), and read state. Bodies are team text — never source content or secrets (the Host value-scans them). | `send_message`, `list_messages`, `mark_message_read`, `ask_question`, `answer_question`, `list_open_questions` |
+| **Tasks & approvals** | Shared tasks assigned to a member; the assignee approves or rejects before a task enters their list, then reports progress. | `assign_task`, `respond_to_task`, `update_task_progress`, `list_tasks` |
+| **Notifications, liveness & wake** | Per-member `active`/`idle`/`gone` liveness, severity-tagged notifications (incoming tasks, questions, urgent messages), and a "wake" that reaches an idle teammate at their next action. | `get_liveness`, `wake_member`, `get_notifications` |
+| **Luna orchestrator** | A coordination orchestrator that assigns work, arbitrates ambiguous conflicts, answers cross-agent questions, and summarizes team state in plain language. Rules-based and deterministic by default — **no external service or API key is required**; an optional LLM adapter is off by default. | `ask_luna` |
+| **Live diffs (opt-in)** | The only feature that shares source-derived content. Off by default; enabled per team via `.coordination/config.json` (`liveDiffs.enabled`). Shared diffs are value-scanned for secrets/excluded paths and surfaced read-only — never applied to a recipient's files automatically. | `share_diff`, `list_diffs` |
+
+These verticals interoperate: the multi-agent simulation drives a full
+message → task assignment → approval → Luna summary → live-diff flow across real
+WSS connections. Message bodies, task text, and Luna prompts are shared as team
+content within the trusted, authorized team; secrets, credentials, and paths
+outside the repository are still rejected.
 
 ## Try it locally
 
@@ -297,6 +321,11 @@ Agent's authenticated loopback API.
 | Intent                      | `declare_intent`, `update_intent`, `withdraw_intent`                                       |
 | Locks                       | `acquire_lock`, `release_lock`                                                             |
 | Live project state          | `subscribe_to_coordination_updates`, `get_connection_status`, `get_project_session_status` |
+| Messaging (V2)              | `send_message`, `list_messages`, `mark_message_read`, `ask_question`, `answer_question`, `list_open_questions` |
+| Tasks & approvals (V2)      | `assign_task`, `respond_to_task`, `update_task_progress`, `list_tasks`                     |
+| Notifications & liveness (V2) | `get_liveness`, `wake_member`, `get_notifications`                                       |
+| Orchestration (V2)          | `ask_luna`                                                                                 |
+| Live diffs (V2, opt-in)     | `share_diff`, `list_diffs`                                                                 |
 
 Configure the MCP client to launch the bridge from the repository being coordinated. The exact
 outer configuration key varies by client; the process definition is:

@@ -23,14 +23,22 @@ import {
   BroadcastMessageType,
   DependencyMessageType,
   ErrorMessageType,
+  DiffMessageType,
   EventMessageType,
   HeartbeatMessageType,
+  MessagingMessageType,
+  TaskMessageType,
+  PresenceLivenessMessageType,
+  LunaMessageType,
   SyncMessageType,
   type AuthHelloPayload,
   type AuthResponsePayload,
   type CoordinationUpdate,
+  type MessageDto,
+  type NotificationDto,
   type SessionId,
   type SyncRequestPayload,
+  type TaskDto,
 } from "@cfls/protocol";
 import { sessionKey } from "@cfls/core-state";
 import { WebSocketServer, type WebSocket } from "ws";
@@ -39,6 +47,7 @@ import {
   CoordinationAuthority,
   type AuthPrincipal,
   type AuthorityOptions,
+  type DiffBroadcast,
 } from "./authority";
 import type { HostConfig } from "./config";
 import { buildDashboardState, renderDashboardHtml } from "./dashboard";
@@ -297,6 +306,8 @@ export class CoordinationServer {
       this.bySession.delete(key);
     }
     this.broadcastParticipants(session);
+    // A disconnect changes the live roster; refresh + broadcast liveness (Req 3.1).
+    this.updateLiveness(session);
   }
 
   private handleMessage(conn: Connection, raw: string): void {
@@ -361,6 +372,11 @@ export class CoordinationServer {
       conn.pendingHello = undefined;
       conn.pendingNonce = undefined;
       this.subscribe(conn, result.principal.session);
+      // A freshly authenticated member is active; refresh + broadcast liveness.
+      this.authority.recordMemberActivity(
+        result.principal.session,
+        result.principal.memberId,
+      );
       // Authentication itself proves the device is live. Record it immediately
       // so work created before the first periodic agent heartbeat still has an
       // expiry baseline if the process exits abruptly.
@@ -376,6 +392,8 @@ export class CoordinationServer {
       // current roster after auth so idle teammates are visible to MCP clients
       // and the editor panel, and peers see the new live member immediately.
       this.broadcastParticipants(result.principal.session);
+      // Refresh + broadcast liveness now that a new member is connected (Req 3.1).
+      this.updateLiveness(result.principal.session);
       // Hand the freshly-connected agent the current metadata-only
       // Dependency_Graph so it can compute indirect risk immediately, sharing
       // one graph across the whole session (Req 19, 20).
@@ -419,6 +437,12 @@ export class CoordinationServer {
     // Heartbeat and sync are serviced on the authenticated connection (Req 9, 26).
     if (type === HeartbeatMessageType.PING) {
       this.authority.recordHeartbeat(principal.session, principal.deviceId);
+      // A heartbeat is member activity for liveness (Req 3.1).
+      this.authority.recordMemberActivity(
+        principal.session,
+        principal.memberId,
+      );
+      this.updateLiveness(principal.session);
       this.send(conn, {
         type: HeartbeatMessageType.ACK,
         payload: { serverTime: new Date().toISOString() },
@@ -437,6 +461,53 @@ export class CoordinationServer {
           type: SyncMessageType.EVENTS,
           payload: { events: response.events },
         });
+        // Incremental sync only carries CoordinationUpdates; deliver any V2
+        // messages sent to this member while it was offline over the parallel
+        // message channel (Req 1.4, X.2). A snapshot response already embeds
+        // messages, so this is only needed on the incremental path.
+        for (const message of this.authority.messagesSince(
+          principal.session,
+          payload.fromRevision,
+          principal.memberId,
+        )) {
+          this.send(conn, {
+            type: MessagingMessageType.UPDATE,
+            payload: { op: "added", message },
+          });
+        }
+        // Likewise deliver task changes made while this member was offline
+        // (Phase 2; Req 2.1, X.2).
+        for (const task of this.authority.tasksSince(
+          principal.session,
+          payload.fromRevision,
+        )) {
+          this.send(conn, {
+            type: TaskMessageType.UPDATE,
+            payload: { op: "updated", task },
+          });
+        }
+        // Deliver notifications raised while this member was offline (Req 3.2, X.2).
+        for (const notification of this.authority.notificationsSince(
+          principal.session,
+          payload.fromRevision,
+          principal.memberId,
+        )) {
+          this.send(conn, {
+            type: PresenceLivenessMessageType.NOTIFY_PUSH,
+            payload: notification,
+          });
+        }
+        // Deliver Live_Diffs shared while this member was offline (Phase 5;
+        // Req 5.1–5.3, X.2). Empty unless the team enabled the opt-in.
+        for (const diff of this.authority.diffsSince(
+          principal.session,
+          payload.fromRevision,
+        )) {
+          this.send(conn, {
+            type: DiffMessageType.UPDATE,
+            payload: { op: "shared", diff },
+          });
+        }
       } else {
         this.send(conn, {
           type: SyncMessageType.SNAPSHOT,
@@ -460,6 +531,32 @@ export class CoordinationServer {
     for (const update of outcome.broadcasts) {
       this.broadcast(principal.session, update);
     }
+    // Deliver V2 message updates to their audience only (Phase 1; Req 1.1).
+    for (const messageUpdate of outcome.messageUpdates ?? []) {
+      this.deliverMessage(principal.session, messageUpdate);
+    }
+    // Broadcast V2 task updates to the whole session (Phase 2; Req 2.1).
+    for (const taskUpdate of outcome.taskUpdates ?? []) {
+      this.deliverTask(principal.session, taskUpdate);
+    }
+    // Deliver V2 notifications to their target member (Phase 3; Req 3.2, 3.3).
+    for (const notification of outcome.notifications ?? []) {
+      this.deliverNotification(principal.session, notification);
+    }
+    // Broadcast V2 live-diff updates to the whole trusted session (Phase 5;
+    // Req 5.1–5.3) — shared with authorized members only.
+    for (const diffUpdate of outcome.diffUpdates ?? []) {
+      this.deliverDiff(principal.session, diffUpdate);
+    }
+    // Return Luna's reply to the requester (Phase 4; Req 4.2–4.5).
+    if (outcome.lunaReply !== undefined) {
+      this.send(conn, {
+        type: LunaMessageType.REPLY,
+        payload: outcome.lunaReply,
+      });
+    }
+    // Any accepted event is member activity; refresh liveness (Req 3.1).
+    this.updateLiveness(principal.session);
     // A dependency-graph upload updates the shared graph: fan the merged graph
     // out to every OTHER connection in the session (Req 19.4, 20.1).
     if (
@@ -554,6 +651,122 @@ export class CoordinationServer {
     }
   }
 
+  /**
+   * Deliver a V2 message update only to its audience (Phase 1; Req 1.1): every
+   * connection in the session for `"all"`, or only connections whose member is
+   * in the audience list for a directed message/question/answer.
+   */
+  private deliverMessage(
+    session: SessionId,
+    update: { op: "added" | "updated"; message: MessageDto; audience: "all" | string[] },
+  ): void {
+    const set = this.bySession.get(sessionKey(session));
+    if (set === undefined) return;
+    const audience =
+      update.audience === "all" ? null : new Set(update.audience);
+    for (const conn of set) {
+      if (conn.principal === undefined) continue;
+      if (audience !== null && !audience.has(conn.principal.memberId)) {
+        continue;
+      }
+      this.send(conn, {
+        type: MessagingMessageType.UPDATE,
+        payload: { op: update.op, message: update.message },
+      });
+    }
+  }
+
+  /**
+   * Broadcast a V2 task update to every connection in the session (Phase 2;
+   * Req 2.1) — tasks are shared team coordination metadata.
+   */
+  private deliverTask(
+    session: SessionId,
+    update: { op: "added" | "updated"; task: TaskDto },
+  ): void {
+    const set = this.bySession.get(sessionKey(session));
+    if (set === undefined) return;
+    for (const conn of set) {
+      if (conn.principal === undefined) continue;
+      this.send(conn, {
+        type: TaskMessageType.UPDATE,
+        payload: { op: update.op, task: update.task },
+      });
+    }
+  }
+
+  /**
+   * Broadcast a V2 live-diff update to every connection in the session (Phase 5;
+   * Req 5.1–5.3) — Live_Diffs are shared with authorized members only, i.e. the
+   * whole trusted session.
+   */
+  private deliverDiff(session: SessionId, update: DiffBroadcast): void {
+    const set = this.bySession.get(sessionKey(session));
+    if (set === undefined) return;
+    for (const conn of set) {
+      if (conn.principal === undefined) continue;
+      this.send(conn, {
+        type: DiffMessageType.UPDATE,
+        payload: { op: update.op, diff: update.diff },
+      });
+    }
+  }
+
+  /**
+   * Deliver a V2 notification only to its target member's connections
+   * (Phase 3; Req 3.2, 3.3).
+   */
+  private deliverNotification(
+    session: SessionId,
+    notification: NotificationDto,
+  ): void {
+    const set = this.bySession.get(sessionKey(session));
+    if (set === undefined) return;
+    for (const conn of set) {
+      if (conn.principal?.memberId !== notification.toMemberId) continue;
+      this.send(conn, {
+        type: PresenceLivenessMessageType.NOTIFY_PUSH,
+        payload: notification,
+      });
+    }
+  }
+
+  /** The set of member ids with a live authenticated connection in the session. */
+  private connectedMemberIds(session: SessionId): string[] {
+    const set = this.bySession.get(sessionKey(session));
+    const members = new Set<string>();
+    for (const conn of set ?? []) {
+      if (conn.principal !== undefined) members.add(conn.principal.memberId);
+    }
+    return [...members];
+  }
+
+  /**
+   * Refresh the authority's live roster and broadcast any liveness changes to
+   * the session (Phase 3; Req 3.1).
+   */
+  private updateLiveness(session: SessionId): void {
+    this.authority.setLiveRoster(session, this.connectedMemberIds(session));
+    for (const change of this.authority.livenessChanges(session)) {
+      this.broadcastLiveness(session, change);
+    }
+  }
+
+  /** Broadcast a single liveness change to every connection in the session. */
+  private broadcastLiveness(
+    session: SessionId,
+    change: { memberId: string; state: string; eventRevision: number },
+  ): void {
+    const set = this.bySession.get(sessionKey(session));
+    if (set === undefined) return;
+    for (const conn of set) {
+      this.send(conn, {
+        type: PresenceLivenessMessageType.LIVENESS_UPDATE,
+        payload: change,
+      });
+    }
+  }
+
   // -------------------------------------------------------------------------
   // Expiry sweep (Req 26)
   // -------------------------------------------------------------------------
@@ -568,6 +781,9 @@ export class CoordinationServer {
         for (const update of removals) {
           this.broadcast(session, update);
         }
+        // Periodically re-derive liveness so active→idle transitions are
+        // broadcast even without new events (Req 3.1).
+        this.updateLiveness(session);
       }
     }, interval);
     // Do not keep the process alive solely for the sweep timer.

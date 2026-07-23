@@ -153,6 +153,45 @@ export type {
   ExpirySweepResult,
 } from "./expiry";
 
+// ---- V2 Phase 1 — Messaging channel (Req 1.1–1.4; idea.md §6 Communication) ----
+export { MessageRegistry } from "./messaging";
+export type { AppendMessageInput, AppendMessageResult } from "./messaging";
+
+// ---- V2 Phase 2 — Task lifecycle & approvals (Req 2.1–2.3; idea.md §6) ----
+export { TaskRegistry } from "./tasks";
+export type {
+  AssignTaskRequest,
+  RespondTaskRequest,
+  ProgressTaskRequest,
+  WithdrawTaskRequest,
+  TaskResult,
+} from "./tasks";
+
+// ---- V2 Phase 3 — Liveness & notifications (Req 3.1–3.3; idea.md §6) ----
+export {
+  LivenessTracker,
+  notificationSeverity,
+  buildNotification,
+  memberIdOf,
+  DEFAULT_ACTIVE_WINDOW_MS,
+} from "./liveness";
+export type { BuildNotificationInput } from "./liveness";
+export { NotificationRegistry } from "./notifications";
+
+// ---- V2 Phase 4 — Luna orchestrator (Req 4.1–4.4; idea.md §5) ----
+export { RulesLunaBrain, LlmLunaBrain } from "./orchestrator";
+export type {
+  LunaBrain,
+  LunaContext,
+  LunaDecision,
+  LunaAssignment,
+  LunaMessagePlan,
+  LlmCompletion,
+} from "./orchestrator";
+
+// ---- V2 Phase 5 — Live diffs (opt-in) (Req 5.1–5.3; idea.md §6) ----
+export { DiffRegistry, diffMemberId } from "./diffs";
+
 // ---- Coalescing & deduplication within the burst window (task 4.22; Req 34; §8.5) ----
 export {
   Coalescer,

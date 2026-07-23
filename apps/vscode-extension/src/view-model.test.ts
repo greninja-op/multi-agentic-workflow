@@ -191,6 +191,7 @@ describe("offline / stale indicator (Req 3.6, 33.3)", () => {
         ...teamStatus.members[0],
         connectionState: "unknown",
         activityKnown: true,
+        liveness: null,
       },
     ]);
     expect(vm.offline).toBe(false);
@@ -298,5 +299,247 @@ describe("offline / stale indicator (Req 3.6, 33.3)", () => {
       "offline",
       "offline",
     ]);
+  });
+});
+
+describe("view-model — V2 messages projection (Phase 1; Req 1.1–1.4)", () => {
+  const emptyRisk: GetRiskMapData = {
+    paths: [],
+    plannedFileCreations: [],
+    highestRevision: 0,
+  };
+
+  it("projects messages with priority and marks answered questions", () => {
+    const vm = buildCoordinationViewModel({
+      riskMap: emptyRisk,
+      messages: {
+        messages: [
+          {
+            messageId: "m-1",
+            kind: "broadcast",
+            sender: { memberId: "alice", deviceId: "d-a" },
+            priority: "urgent",
+            body: "deploy freeze",
+            eventRevision: 5,
+            sentAt: "2024-01-01T00:00:00Z",
+          },
+          {
+            messageId: "q-1",
+            kind: "question",
+            sender: { memberId: "bob", deviceId: "d-b" },
+            toMemberId: "me",
+            priority: "normal",
+            body: "which branch?",
+            answered: false,
+            correlationId: "c-1",
+            eventRevision: 6,
+            sentAt: "2024-01-01T00:01:00Z",
+          },
+        ],
+        unreadCount: 1,
+      },
+      connection: online,
+      staleness: fresh,
+    });
+
+    expect(vm.messages.map((m) => m.messageId)).toEqual(["m-1", "q-1"]);
+    expect(vm.messages[0]?.priority).toBe("urgent");
+    expect(vm.messages[0]?.answered).toBeNull(); // broadcast is not a question
+    expect(vm.messages[1]?.answered).toBe(false); // open question
+    expect(vm.unreadCount).toBe(1);
+  });
+
+  it("defaults to no messages and zero unread when messaging data is absent", () => {
+    const vm = buildCoordinationViewModel({
+      riskMap: emptyRisk,
+      connection: online,
+      staleness: fresh,
+    });
+    expect(vm.messages).toEqual([]);
+    expect(vm.unreadCount).toBe(0);
+  });
+});
+
+describe("view-model — V2 tasks projection (Phase 2; Req 2.1–2.3)", () => {
+  const emptyRisk: GetRiskMapData = {
+    paths: [],
+    plannedFileCreations: [],
+    highestRevision: 0,
+  };
+
+  it("projects my task list, incoming proposals, and all tasks", () => {
+    const mk = (taskId: string, status: string) => ({
+      taskId,
+      title: `T-${taskId}`,
+      description: "d",
+      assignee: { memberId: "me", deviceId: "" },
+      assigner: { memberId: "alice", deviceId: "d-a" },
+      status: status as never,
+      eventRevision: 1,
+    });
+    const vm = buildCoordinationViewModel({
+      riskMap: emptyRisk,
+      tasks: {
+        tasks: [mk("t-1", "in_progress"), mk("t-2", "proposed")],
+        myTaskList: [mk("t-1", "in_progress")],
+        incomingProposals: [mk("t-2", "proposed")],
+      },
+      connection: online,
+      staleness: fresh,
+    });
+
+    expect(vm.myTasks.map((t) => t.taskId)).toEqual(["t-1"]);
+    expect(vm.myTasks[0]?.status).toBe("in_progress");
+    expect(vm.incomingTasks.map((t) => t.taskId)).toEqual(["t-2"]);
+    expect(vm.allTasks.map((t) => t.taskId)).toEqual(["t-1", "t-2"]);
+    expect(vm.myTasks[0]?.assignerMemberId).toBe("alice");
+  });
+
+  it("defaults to empty task arrays when task data is absent", () => {
+    const vm = buildCoordinationViewModel({
+      riskMap: emptyRisk,
+      connection: online,
+      staleness: fresh,
+    });
+    expect(vm.myTasks).toEqual([]);
+    expect(vm.incomingTasks).toEqual([]);
+    expect(vm.allTasks).toEqual([]);
+  });
+});
+
+describe("view-model — V2 liveness & notifications projection (Phase 3; Req 3.1–3.3)", () => {
+  const emptyRisk: GetRiskMapData = {
+    paths: [],
+    plannedFileCreations: [],
+    highestRevision: 0,
+  };
+
+  it("attaches fine-grained liveness to team members", () => {
+    const vm = buildCoordinationViewModel({
+      riskMap: emptyRisk,
+      connectionStatus: {
+        status: "online",
+        participants: { connected: ["alice", "bob"], offline: [] },
+        manualCoordinationRequired: false,
+      },
+      liveness: {
+        members: [
+          { memberId: "alice", state: "active" },
+          { memberId: "bob", state: "idle" },
+        ],
+      },
+      connection: online,
+      staleness: fresh,
+    });
+    const bob = vm.members.find((m) => m.memberId === "bob");
+    expect(bob?.liveness).toBe("idle");
+    const alice = vm.members.find((m) => m.memberId === "alice");
+    expect(alice?.liveness).toBe("active");
+  });
+
+  it("projects notifications and counts urgent ones", () => {
+    const vm = buildCoordinationViewModel({
+      riskMap: emptyRisk,
+      notifications: {
+        notifications: [
+          { notificationId: "n1", toMemberId: "me", severity: "warn", source: "task", refId: "t-1", summary: "task", eventRevision: 1 },
+          { notificationId: "n2", toMemberId: "me", severity: "urgent", source: "wake", refId: "me", summary: "wake", eventRevision: 2 },
+        ],
+      },
+      connection: online,
+      staleness: fresh,
+    });
+    expect(vm.notifications.map((n) => n.notificationId)).toEqual(["n1", "n2"]);
+    expect(vm.urgentNotificationCount).toBe(1);
+  });
+
+  it("defaults to empty notifications and null liveness when absent", () => {
+    const vm = buildCoordinationViewModel({
+      riskMap: emptyRisk,
+      connectionStatus: {
+        status: "online",
+        participants: { connected: ["alice"], offline: [] },
+        manualCoordinationRequired: false,
+      },
+      connection: online,
+      staleness: fresh,
+    });
+    expect(vm.notifications).toEqual([]);
+    expect(vm.urgentNotificationCount).toBe(0);
+    expect(vm.members.find((m) => m.memberId === "alice")?.liveness).toBeNull();
+  });
+});
+
+describe("view-model — V2 Luna projection (Phase 4; Req 4.5)", () => {
+  const emptyRisk: GetRiskMapData = {
+    paths: [],
+    plannedFileCreations: [],
+    highestRevision: 0,
+  };
+
+  it("projects Luna's last reply with any produced task/message ids", () => {
+    const vm = buildCoordinationViewModel({
+      riskMap: emptyRisk,
+      luna: {
+        action: "assign",
+        summary: "Assigned the parser work to bob.",
+        producedTaskId: "task-7",
+      },
+      connection: online,
+      staleness: fresh,
+    });
+    expect(vm.lunaLastReply).toEqual({
+      action: "assign",
+      summary: "Assigned the parser work to bob.",
+      producedTaskId: "task-7",
+      producedMessageId: null,
+    });
+  });
+
+  it("defaults lunaLastReply to null when Luna has not been asked", () => {
+    const vm = buildCoordinationViewModel({
+      riskMap: emptyRisk,
+      connection: online,
+      staleness: fresh,
+    });
+    expect(vm.lunaLastReply).toBeNull();
+  });
+});
+
+describe("view-model — V2 live-diff projection (Phase 5; Req 5.5)", () => {
+  const emptyRisk: GetRiskMapData = {
+    paths: [],
+    plannedFileCreations: [],
+    highestRevision: 0,
+  };
+
+  it("projects shared Live_Diffs read-only with member and patch", () => {
+    const vm = buildCoordinationViewModel({
+      riskMap: emptyRisk,
+      diffs: {
+        diffs: [
+          {
+            path: "src/api.ts",
+            member: { memberId: "alice", deviceId: "d-1" },
+            patch: "@@ -1 +1 @@\n-old\n+new",
+            eventRevision: 3,
+          },
+        ],
+      },
+      connection: online,
+      staleness: fresh,
+    });
+    expect(vm.liveDiffs).toEqual([
+      { path: "src/api.ts", memberId: "alice", patch: "@@ -1 +1 @@\n-old\n+new" },
+    ]);
+  });
+
+  it("defaults to no live diffs when the opt-in is off / data absent", () => {
+    const vm = buildCoordinationViewModel({
+      riskMap: emptyRisk,
+      connection: online,
+      staleness: fresh,
+    });
+    expect(vm.liveDiffs).toEqual([]);
   });
 });

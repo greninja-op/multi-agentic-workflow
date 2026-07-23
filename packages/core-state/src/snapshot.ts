@@ -32,9 +32,13 @@
 import type { SessionId, SessionStateSnapshot } from "@cfls/protocol";
 
 import type { IntentRegistry } from "./intents";
+import type { DiffRegistry } from "./diffs";
 import type { LockRegistry } from "./locks";
+import type { MessageRegistry } from "./messaging";
+import type { NotificationRegistry } from "./notifications";
 import type { PresenceRegistry } from "./presence";
 import type { RevisionCounter } from "./revisions";
+import type { TaskRegistry } from "./tasks";
 
 /**
  * The per-session in-memory authorities projected into / restored from a
@@ -47,6 +51,28 @@ export interface SessionRegistries {
   intents: IntentRegistry;
   presence: PresenceRegistry;
   revisions: RevisionCounter;
+  /**
+   * V2 messaging registry (Phase 1). Optional so V1 callers that do not
+   * coordinate messages are unaffected; when present, messages are captured in
+   * and restored from the snapshot (Req 1.4, X.2).
+   */
+  messages?: MessageRegistry;
+  /**
+   * V2 task registry (Phase 2). Optional; when present, tasks are captured in
+   * and restored from the snapshot (Req 2.1, X.2).
+   */
+  tasks?: TaskRegistry;
+  /**
+   * V2 notification registry (Phase 3). Optional; when present, notifications
+   * are captured in and restored from the snapshot (Req 3.2, X.2).
+   */
+  notifications?: NotificationRegistry;
+  /**
+   * V2 live-diff registry (Phase 5). Optional and used only when Live_Diff
+   * sharing is enabled; when present, currently-shared diffs are captured in and
+   * restored from the snapshot (Req 5.1–5.3, X.2).
+   */
+  diffs?: DiffRegistry;
 }
 
 /**
@@ -77,13 +103,41 @@ export function serializeSessionState(
     createPaths: intent.createPaths.map((creation) => ({ ...creation })),
   }));
 
-  return {
+  const snapshot: SessionStateSnapshot = {
     session,
     locks,
     presence,
     intents,
     highestRevision: registries.revisions.highest(session),
   };
+
+  if (registries.messages !== undefined) {
+    // Deep, independent copies so persisting/mutating the snapshot never
+    // touches live registry state (Req 1.4, X.2).
+    snapshot.messages = registries.messages
+      .allMessages(session)
+      .map((message) => ({ ...message, sender: { ...message.sender } }));
+  }
+
+  if (registries.tasks !== undefined) {
+    snapshot.tasks = registries.tasks.allTasks(session).map((task) => ({
+      ...task,
+      assignee: { ...task.assignee },
+      assigner: { ...task.assigner },
+    }));
+  }
+
+  if (registries.notifications !== undefined) {
+    snapshot.notifications = registries.notifications.allNotifications(session);
+  }
+
+  if (registries.diffs !== undefined) {
+    snapshot.diffs = registries.diffs
+      .allDiffs(session)
+      .map((diff) => ({ ...diff, member: { ...diff.member } }));
+  }
+
+  return snapshot;
 }
 
 /**
@@ -109,6 +163,26 @@ function maxPersistedRevision(snapshot: SessionStateSnapshot): number {
       max = intent.eventRevision;
     }
   }
+  for (const message of snapshot.messages ?? []) {
+    if (message.eventRevision > max) {
+      max = message.eventRevision;
+    }
+  }
+  for (const task of snapshot.tasks ?? []) {
+    if (task.eventRevision > max) {
+      max = task.eventRevision;
+    }
+  }
+  for (const notification of snapshot.notifications ?? []) {
+    if (notification.eventRevision > max) {
+      max = notification.eventRevision;
+    }
+  }
+  for (const diff of snapshot.diffs ?? []) {
+    if (diff.eventRevision > max) {
+      max = diff.eventRevision;
+    }
+  }
   return max;
 }
 
@@ -128,5 +202,20 @@ export function restoreSessionState(
   registries.locks.restore(snapshot.session, snapshot.locks);
   registries.intents.restore(snapshot.session, snapshot.intents);
   registries.presence.restore(snapshot.session, snapshot.presence);
+  if (registries.messages !== undefined) {
+    registries.messages.restore(snapshot.session, snapshot.messages ?? []);
+  }
+  if (registries.tasks !== undefined) {
+    registries.tasks.restore(snapshot.session, snapshot.tasks ?? []);
+  }
+  if (registries.notifications !== undefined) {
+    registries.notifications.restore(
+      snapshot.session,
+      snapshot.notifications ?? [],
+    );
+  }
+  if (registries.diffs !== undefined) {
+    registries.diffs.restore(snapshot.session, snapshot.diffs ?? []);
+  }
   registries.revisions.resume(snapshot.session, maxPersistedRevision(snapshot));
 }

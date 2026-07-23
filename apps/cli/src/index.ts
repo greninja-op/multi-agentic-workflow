@@ -33,6 +33,7 @@ import {
   readAgentConfig,
   readAutoSyncConfig,
   readHostConfig,
+  readLiveDiffsConfig,
   updateAgentConfig,
   writeLocalApiConfig,
 } from "./config-files";
@@ -240,6 +241,9 @@ async function cmdHost(args: ParsedArgs, cwd: string): Promise<void> {
   const dbPath =
     stringOption(args, "db") ?? process.env["CFLS_DB_PATH"] ?? "host.db";
   const dashboard = parseDashboardEnv(process.env["CFLS_DASHBOARD"]);
+  // Opt-in Live_Diff sharing (Phase 5; Req 5.1, 5.4). Off unless the team's
+  // committed .coordination/config.json sets liveDiffs.enabled = true.
+  const liveDiffs = readLiveDiffsConfig(teamConfigPath(repoRoot));
   const running = await startHost(
     {
       hostUrl,
@@ -247,8 +251,14 @@ async function cmdHost(args: ParsedArgs, cwd: string): Promise<void> {
       dbPath,
       ...(dashboard === undefined ? {} : { dashboard }),
     },
-    { expirySweepIntervalMs: 15_000 },
+    { expirySweepIntervalMs: 15_000, liveDiffsEnabled: liveDiffs.enabled },
   );
+  if (liveDiffs.enabled) {
+    log.warn(
+      "Live_Diff sharing is ENABLED (opt-in): change diffs are shared within the " +
+        "trusted team. This is the only feature that moves source-derived content.",
+    );
+  }
   running.authority.registerSession(
     session,
     hostConfig.authorizedAdminPublicKeys,

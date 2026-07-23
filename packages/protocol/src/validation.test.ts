@@ -428,3 +428,268 @@ describe("canonicalize — stability regardless of key order", () => {
     expect(canonicalEnvelopeString(withSig)).toBe(canonicalEnvelopeString(env));
   });
 });
+
+// ---------------------------------------------------------------------------
+// V2 messaging payload validation (Phase 1; Req 1.1-1.4)
+// ---------------------------------------------------------------------------
+
+describe("V2 messaging payload validation", () => {
+  it("accepts a valid message.send (direct) payload", () => {
+    const result = validatePayload("message.send", {
+      kind: "direct",
+      toMemberId: "u-2",
+      priority: "urgent",
+      body: "heads up on payments.ts",
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it("accepts a message.send with only the required fields (priority optional)", () => {
+    const result = validatePayload("message.send", {
+      kind: "broadcast",
+      body: "team, standup in 5",
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it("rejects a message.send missing its body with FORMAT_ERROR", () => {
+    const result = validatePayload("message.send", { kind: "direct" });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("FORMAT_ERROR");
+  });
+
+  it("rejects a message.send with an out-of-range kind with FORMAT_ERROR", () => {
+    const result = validatePayload("message.send", {
+      kind: "shout",
+      body: "hi",
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("FORMAT_ERROR");
+  });
+
+  it("accepts a valid message.update broadcast payload", () => {
+    const result = validatePayload("message.update", {
+      op: "added",
+      message: {
+        messageId: "m-1",
+        kind: "question",
+        sender: { memberId: "u-1", deviceId: "dev-1" },
+        toMemberId: "u-2",
+        priority: "normal",
+        body: "which branch is prod?",
+        correlationId: "c-1",
+        eventRevision: 12,
+        sentAt: "2024-01-01T10:00:00Z",
+      },
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it("accepts a valid message.read payload", () => {
+    const result = validatePayload("message.read", { messageId: "m-1" });
+    expect(result.ok).toBe(true);
+  });
+
+  it("rejects a message.read missing messageId with FORMAT_ERROR", () => {
+    const result = validatePayload("message.read", {});
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("FORMAT_ERROR");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// V2 task payload validation (Phase 2; Req 2.1-2.3)
+// ---------------------------------------------------------------------------
+
+describe("V2 task payload validation", () => {
+  it("accepts a valid task.assign payload", () => {
+    const result = validatePayload("task.assign", {
+      title: "Add logout flow",
+      description: "Implement the /logout endpoint and wire the UI button",
+      assigneeMemberId: "bob",
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it("rejects a task.assign missing assigneeMemberId with FORMAT_ERROR", () => {
+    const result = validatePayload("task.assign", {
+      title: "x",
+      description: "y",
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("FORMAT_ERROR");
+  });
+
+  it("accepts a task.respond payload", () => {
+    const result = validatePayload("task.respond", {
+      taskId: "t-1",
+      accept: true,
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it("accepts a task.progress payload and rejects an out-of-range status", () => {
+    expect(
+      validatePayload("task.progress", { taskId: "t-1", status: "done" }).ok,
+    ).toBe(true);
+    const bad = validatePayload("task.progress", {
+      taskId: "t-1",
+      status: "proposed",
+    });
+    expect(bad.ok).toBe(false);
+    if (!bad.ok) expect(bad.error.code).toBe("FORMAT_ERROR");
+  });
+
+  it("accepts a valid task.update broadcast payload", () => {
+    const result = validatePayload("task.update", {
+      op: "added",
+      task: {
+        taskId: "t-1",
+        title: "Add logout flow",
+        description: "…",
+        assignee: { memberId: "bob", deviceId: "dev-b" },
+        assigner: { memberId: "alice", deviceId: "dev-a" },
+        status: "proposed",
+        eventRevision: 9,
+      },
+    });
+    expect(result.ok).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// V2 notifications, liveness & wake payload validation (Phase 3; Req 3.1-3.3)
+// ---------------------------------------------------------------------------
+
+describe("V2 liveness/notify/wake payload validation", () => {
+  it("accepts a valid liveness.update payload", () => {
+    const result = validatePayload("liveness.update", {
+      memberId: "bob",
+      state: "idle",
+      eventRevision: 4,
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it("rejects a liveness.update with an out-of-range state", () => {
+    const result = validatePayload("liveness.update", {
+      memberId: "bob",
+      state: "away",
+      eventRevision: 4,
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("FORMAT_ERROR");
+  });
+
+  it("accepts a wake.request with and without a reason", () => {
+    expect(validatePayload("wake.request", { targetMemberId: "carol" }).ok).toBe(true);
+    expect(
+      validatePayload("wake.request", { targetMemberId: "carol", reason: "PR is blocked" }).ok,
+    ).toBe(true);
+  });
+
+  it("accepts a valid notify.push payload", () => {
+    const result = validatePayload("notify.push", {
+      notificationId: "n-1",
+      toMemberId: "bob",
+      severity: "urgent",
+      source: "task",
+      refId: "t-1",
+      summary: "Alice assigned you a task",
+      eventRevision: 9,
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it("rejects a notify.push with an out-of-range severity", () => {
+    const result = validatePayload("notify.push", {
+      notificationId: "n-1",
+      toMemberId: "bob",
+      severity: "critical",
+      source: "task",
+      refId: "t-1",
+      summary: "x",
+      eventRevision: 9,
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("FORMAT_ERROR");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// V2 Luna orchestrator payload validation (Phase 4; Req 4.1-4.5)
+// ---------------------------------------------------------------------------
+
+describe("V2 luna payload validation", () => {
+  it("accepts a valid luna.request payload", () => {
+    const result = validatePayload("luna.request", {
+      action: "assign",
+      prompt: "tell bob to do the logout flow",
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it("rejects a luna.request with an out-of-range action", () => {
+    const result = validatePayload("luna.request", {
+      action: "delegate",
+      prompt: "x",
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("FORMAT_ERROR");
+  });
+
+  it("accepts a luna.reply with an optional produced id", () => {
+    const result = validatePayload("luna.reply", {
+      action: "assign",
+      summary: "Assigned to bob",
+      producedTaskId: "t-1",
+    });
+    expect(result.ok).toBe(true);
+  });
+});
+
+describe("V2 live-diff payload validation (Phase 5; Req 5.1–5.5)", () => {
+  it("accepts a valid diff.share payload", () => {
+    const result = validatePayload("diff.share", {
+      path: "src/api.ts",
+      patch: "@@ -1 +1 @@\n-old\n+new",
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it("accepts a diff.share with an empty patch (removes the shared diff)", () => {
+    const result = validatePayload("diff.share", { path: "src/api.ts", patch: "" });
+    expect(result.ok).toBe(true);
+  });
+
+  it("rejects a diff.share missing the patch field", () => {
+    const result = validatePayload("diff.share", { path: "src/api.ts" });
+    expect(result.ok).toBe(false);
+  });
+
+  it("accepts a diff.update carrying a LiveDiffDto", () => {
+    const result = validatePayload("diff.update", {
+      op: "shared",
+      diff: {
+        path: "src/api.ts",
+        member: { memberId: "m-1", deviceId: "d-1" },
+        patch: "@@ -1 +1 @@\n-old\n+new",
+        eventRevision: 7,
+      },
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it("rejects a diff.update with an out-of-range op", () => {
+    const result = validatePayload("diff.update", {
+      op: "deleted",
+      diff: {
+        path: "src/api.ts",
+        member: { memberId: "m-1", deviceId: "d-1" },
+        patch: "",
+        eventRevision: 7,
+      },
+    });
+    expect(result.ok).toBe(false);
+  });
+});

@@ -69,6 +69,8 @@ export interface SimulationOptions {
   expirySweepIntervalMs?: number;
   /** Per-agent WSS heartbeat interval (ms); 0 disables auto pings (default 0). */
   heartbeatIntervalMs?: number;
+  /** Enable opt-in Live_Diff sharing on the host (Phase 5; default off). */
+  liveDiffs?: boolean;
 }
 
 /** One connected simulated agent plus its identity and live handles. */
@@ -143,7 +145,12 @@ export class Simulation {
         dbPath: join(tmpRoot, "host.db"),
         ...(options.expiry !== undefined ? { expiry: options.expiry } : {}),
       },
-      { expirySweepIntervalMs: options.expirySweepIntervalMs ?? 0 },
+      {
+        expirySweepIntervalMs: options.expirySweepIntervalMs ?? 0,
+        ...(options.liveDiffs !== undefined
+          ? { liveDiffsEnabled: options.liveDiffs }
+          : {}),
+      },
     );
     host.authority.registerSession(session, [admin.publicKey]);
 

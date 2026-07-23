@@ -22,9 +22,14 @@ import type {
   CoordinationUpdate,
   DependencyEdge,
   DependencyGraph,
+  LiveDiffDto,
+  LivenessState,
   MemberRef,
+  MessageDto,
+  NotificationDto,
   RiskMapEntry,
   SessionId,
+  TaskDto,
 } from "@cfls/protocol";
 import type {
   AcquireLockData,
@@ -46,10 +51,38 @@ import type {
   GetRiskMapRequest,
   GetTeamStatusData,
   GetTeamStatusRequest,
+  AskLunaData,
+  AskLunaRequest,
+  ShareDiffData,
+  ShareDiffRequest,
+  ListDiffsData,
+  ListDiffsRequest,
+  AssignTaskData,
+  AssignTaskRequest,
+  GetLivenessData,
+  GetLivenessRequest,
+  GetNotificationsData,
+  GetNotificationsRequest,
+  ListMessagesData,
+  ListMessagesRequest,
+  ListOpenQuestionsData,
+  ListOpenQuestionsRequest,
+  ListTasksData,
+  ListTasksRequest,
+  MarkMessageReadData,
+  MarkMessageReadRequest,
   ProjectSessionStatusData,
+  RespondTaskData,
+  RespondTaskRequest,
+  UpdateTaskProgressData,
+  UpdateTaskProgressRequest,
+  WakeData,
+  WakeRequest,
   ReleaseLockData,
   ReleaseLockRequest,
   RiskPathEntry,
+  SendMessageData,
+  SendMessageRequest,
   StalenessSnapshot,
   SubscribeData,
   SubscribeRequest,
@@ -93,6 +126,13 @@ export interface AgentPortOptions {
   manualConfig?: boolean;
   connectedMembers?: string[];
   offlineMembers?: string[];
+  /**
+   * Optional local diff provider for `share_diff` (Phase 5; Req 5.2). When the
+   * caller omits an explicit `patch`, the agent computes the current change diff
+   * for the path locally (e.g. `git diff -- <path>` in the Authorized_Folder).
+   * Absent ⇒ an omitted patch shares nothing (clears any prior diff).
+   */
+  localDiff?: (path: string) => string | Promise<string>;
 }
 
 /** The agent's real, host-backed {@link AgentPort} (design §3.2, §3.4). */
@@ -108,6 +148,9 @@ export class AgentCoordinationPort implements AgentPort {
   private readonly manualConfig: boolean;
   private connectedMembers: string[];
   private offlineMembers: string[];
+  private readonly localDiff:
+    | ((path: string) => string | Promise<string>)
+    | undefined;
 
   private subscriptionSeq = 0;
   private readonly subscriptions = new Map<
@@ -116,6 +159,35 @@ export class AgentCoordinationPort implements AgentPort {
   >();
   private readonly onGatewayUpdate = (update: CoordinationUpdate): void => {
     this.view.applyUpdate(this.session, update);
+  };
+  private readonly onGatewayMessage = (payload: {
+    op: "added" | "updated";
+    message: MessageDto;
+  }): void => {
+    this.view.applyMessage(this.session, payload.message);
+  };
+  private readonly onGatewayTask = (payload: {
+    op: "added" | "updated";
+    task: TaskDto;
+  }): void => {
+    this.view.applyTask(this.session, payload.task);
+  };
+  private readonly onGatewayLiveness = (payload: {
+    memberId: string;
+    state: LivenessState;
+  }): void => {
+    this.view.applyLiveness(this.session, payload.memberId, payload.state);
+  };
+  private readonly onGatewayNotification = (
+    payload: NotificationDto,
+  ): void => {
+    this.view.applyNotification(this.session, payload);
+  };
+  private readonly onGatewayDiff = (payload: {
+    op: "shared" | "removed";
+    diff: LiveDiffDto;
+  }): void => {
+    this.view.applyDiff(this.session, payload.op, payload.diff);
   };
 
   constructor(options: AgentPortOptions) {
@@ -129,9 +201,19 @@ export class AgentCoordinationPort implements AgentPort {
     this.manualConfig = options.manualConfig ?? false;
     this.connectedMembers = options.connectedMembers ?? [options.self.memberId];
     this.offlineMembers = options.offlineMembers ?? [];
+    this.localDiff = options.localDiff;
 
     // One shared view fed by every host broadcast (multi-client fan-in, Req 31.1).
     this.gateway.on("update", this.onGatewayUpdate);
+    // V2 messaging (Phase 1): converge the message view from host deliveries.
+    this.gateway.on("message", this.onGatewayMessage);
+    // V2 tasks (Phase 2): converge the task view from host deliveries.
+    this.gateway.on("task", this.onGatewayTask);
+    // V2 liveness + notifications (Phase 3): converge those views.
+    this.gateway.on("liveness", this.onGatewayLiveness);
+    this.gateway.on("notification", this.onGatewayNotification);
+    // V2 live diffs (Phase 5): converge the diff view from host deliveries.
+    this.gateway.on("diff", this.onGatewayDiff);
   }
 
   // ---- Envelope inputs ------------------------------------------------------
@@ -513,9 +595,315 @@ export class AgentCoordinationPort implements AgentPort {
     this.subscriptions.delete(subscriptionId);
   }
 
+  // ---- V2 messaging (Phase 1; Req 1.1–1.4) ---------------------------------
+
+  async sendMessage(
+    req: SendMessageRequest,
+  ): Promise<AgentResult<SendMessageData>> {
+    if (!this.sameSession(req.session)) {
+      return this.sessionNotFound();
+    }
+    if (!this.authorized) {
+      return this.notAuthorized();
+    }
+    const result = await this.gateway.transmit({
+      type: "message.send",
+      payload: {
+        kind: req.kind,
+        ...(req.toMemberId !== undefined
+          ? { toMemberId: req.toMemberId }
+          : {}),
+        ...(req.priority !== undefined ? { priority: req.priority } : {}),
+        body: req.body,
+        ...(req.correlationId !== undefined
+          ? { correlationId: req.correlationId }
+          : {}),
+      },
+    });
+    if (!result.ok) {
+      return { ok: false, error: result.error };
+    }
+    return {
+      ok: true,
+      data: { messageId: result.eventId, eventRevision: result.eventRevision },
+    };
+  }
+
+  listMessages(req: ListMessagesRequest): AgentResult<ListMessagesData> {
+    if (!this.sameSession(req.session)) {
+      return this.sessionNotFound();
+    }
+    if (!this.authorized) {
+      return this.notAuthorized();
+    }
+    return {
+      ok: true,
+      data: {
+        messages: this.view.messagesForMember(
+          this.session,
+          this.self.memberId,
+        ),
+        unreadCount: this.view.unreadForMember(
+          this.session,
+          this.self.memberId,
+        ),
+      },
+    };
+  }
+
+  async markMessageRead(
+    req: MarkMessageReadRequest,
+  ): Promise<AgentResult<MarkMessageReadData>> {
+    const result = await this.gateway.transmit({
+      type: "message.read",
+      payload: { messageId: req.messageId },
+    });
+    if (!result.ok) {
+      return { ok: false, error: result.error };
+    }
+    this.view.markMessageReadLocal(
+      this.session,
+      req.messageId,
+      this.self.memberId,
+    );
+    return { ok: true, data: { eventRevision: result.eventRevision } };
+  }
+
+  listOpenQuestions(
+    req: ListOpenQuestionsRequest,
+  ): AgentResult<ListOpenQuestionsData> {
+    if (!this.sameSession(req.session)) {
+      return this.sessionNotFound();
+    }
+    if (!this.authorized) {
+      return this.notAuthorized();
+    }
+    return {
+      ok: true,
+      data: {
+        questions: this.view.openQuestionsForMember(
+          this.session,
+          this.self.memberId,
+        ),
+      },
+    };
+  }
+
+  // ---- V2 tasks (Phase 2; Req 2.1–2.3) -------------------------------------
+
+  async assignTask(
+    req: AssignTaskRequest,
+  ): Promise<AgentResult<AssignTaskData>> {
+    if (!this.sameSession(req.session)) {
+      return this.sessionNotFound();
+    }
+    if (!this.authorized) {
+      return this.notAuthorized();
+    }
+    const result = await this.gateway.transmit({
+      type: "task.assign",
+      payload: {
+        title: req.title,
+        description: req.description,
+        assigneeMemberId: req.assigneeMemberId,
+      },
+    });
+    if (!result.ok) {
+      return { ok: false, error: result.error };
+    }
+    return {
+      ok: true,
+      data: { taskId: result.eventId, eventRevision: result.eventRevision },
+    };
+  }
+
+  async respondTask(
+    req: RespondTaskRequest,
+  ): Promise<AgentResult<RespondTaskData>> {
+    const result = await this.gateway.transmit({
+      type: "task.respond",
+      payload: { taskId: req.taskId, accept: req.accept },
+    });
+    if (!result.ok) {
+      return { ok: false, error: result.error };
+    }
+    return { ok: true, data: { eventRevision: result.eventRevision } };
+  }
+
+  async updateTaskProgress(
+    req: UpdateTaskProgressRequest,
+  ): Promise<AgentResult<UpdateTaskProgressData>> {
+    const result = await this.gateway.transmit({
+      type: "task.progress",
+      payload: { taskId: req.taskId, status: req.status },
+    });
+    if (!result.ok) {
+      return { ok: false, error: result.error };
+    }
+    return { ok: true, data: { eventRevision: result.eventRevision } };
+  }
+
+  listTasks(req: ListTasksRequest): AgentResult<ListTasksData> {
+    if (!this.sameSession(req.session)) {
+      return this.sessionNotFound();
+    }
+    if (!this.authorized) {
+      return this.notAuthorized();
+    }
+    return {
+      ok: true,
+      data: {
+        tasks: this.view.allTasks(this.session),
+        myTaskList: this.view.taskListForMember(
+          this.session,
+          this.self.memberId,
+        ),
+        incomingProposals: this.view.incomingProposalsForMember(
+          this.session,
+          this.self.memberId,
+        ),
+      },
+    };
+  }
+
+  // ---- V2 liveness, notifications & wake (Phase 3; Req 3.1–3.3) ------------
+
+  getLiveness(req: GetLivenessRequest): AgentResult<GetLivenessData> {
+    if (!this.sameSession(req.session)) {
+      return this.sessionNotFound();
+    }
+    if (!this.authorized) {
+      return this.notAuthorized();
+    }
+    return { ok: true, data: { members: this.view.livenessStates(this.session) } };
+  }
+
+  async wake(req: WakeRequest): Promise<AgentResult<WakeData>> {
+    if (!this.sameSession(req.session)) {
+      return this.sessionNotFound();
+    }
+    if (!this.authorized) {
+      return this.notAuthorized();
+    }
+    const result = await this.gateway.transmit({
+      type: "wake.request",
+      payload: {
+        targetMemberId: req.targetMemberId,
+        ...(req.reason !== undefined ? { reason: req.reason } : {}),
+      },
+    });
+    if (!result.ok) {
+      return { ok: false, error: result.error };
+    }
+    return { ok: true, data: { targetMemberId: req.targetMemberId } };
+  }
+
+  getNotifications(
+    req: GetNotificationsRequest,
+  ): AgentResult<GetNotificationsData> {
+    if (!this.sameSession(req.session)) {
+      return this.sessionNotFound();
+    }
+    if (!this.authorized) {
+      return this.notAuthorized();
+    }
+    return {
+      ok: true,
+      data: {
+        notifications: this.view.notificationsForMember(
+          this.session,
+          this.self.memberId,
+        ),
+      },
+    };
+  }
+
+  // ---- V2 Luna orchestrator (Phase 4; Req 4.1–4.5) -------------------------
+
+  async askLuna(req: AskLunaRequest): Promise<AgentResult<AskLunaData>> {
+    if (!this.sameSession(req.session)) {
+      return this.sessionNotFound();
+    }
+    if (!this.authorized) {
+      return this.notAuthorized();
+    }
+    // Only the real WSS gateway orchestrates Luna; when absent (in-process
+    // fan-in gateway or offline), surface an OFFLINE_QUEUED-style failure.
+    if (this.gateway.askLuna === undefined) {
+      return {
+        ok: false,
+        error: {
+          code: "OFFLINE_QUEUED",
+          message:
+            "The CoordinationAgent cannot reach Luna (no orchestrator on this connection).",
+        },
+      };
+    }
+    const result = await this.gateway.askLuna({
+      action: req.action,
+      prompt: req.prompt,
+      ...(req.refId !== undefined ? { refId: req.refId } : {}),
+    });
+    if (!result.ok) {
+      return { ok: false, error: result.error };
+    }
+    return { ok: true, data: result.reply };
+  }
+
+  // ---- V2 live diffs (Phase 5; Req 5.1–5.5) --------------------------------
+
+  async shareDiff(req: ShareDiffRequest): Promise<AgentResult<ShareDiffData>> {
+    if (!this.sameSession(req.session)) {
+      return this.sessionNotFound();
+    }
+    if (!this.authorized) {
+      return this.notAuthorized();
+    }
+    // Prefer an explicit patch; otherwise compute the local git diff for the
+    // path when a provider is configured, else share nothing (clears the diff).
+    // The provider only runs while online so an offline share never does I/O.
+    let patch = req.patch;
+    if (
+      patch === undefined &&
+      this.localDiff !== undefined &&
+      this.gateway.online()
+    ) {
+      patch = await this.localDiff(req.path);
+    }
+    const result = await this.gateway.transmit({
+      type: "diff.share",
+      payload: { path: req.path, patch: patch ?? "" },
+    });
+    if (!result.ok) {
+      return { ok: false, error: result.error };
+    }
+    return {
+      ok: true,
+      data: {
+        eventRevision: result.eventRevision,
+        shared: (patch ?? "").length > 0,
+      },
+    };
+  }
+
+  listDiffs(req: ListDiffsRequest): AgentResult<ListDiffsData> {
+    if (!this.sameSession(req.session)) {
+      return this.sessionNotFound();
+    }
+    if (!this.authorized) {
+      return this.notAuthorized();
+    }
+    return { ok: true, data: { diffs: this.view.allDiffs(this.session) } };
+  }
+
   /** Release all gateway listeners owned by this port during agent shutdown. */
   dispose(): void {
     this.gateway.off("update", this.onGatewayUpdate);
+    this.gateway.off("message", this.onGatewayMessage);
+    this.gateway.off("task", this.onGatewayTask);
+    this.gateway.off("liveness", this.onGatewayLiveness);
+    this.gateway.off("notification", this.onGatewayNotification);
+    this.gateway.off("diff", this.onGatewayDiff);
     for (const subscriptionId of this.subscriptions.keys()) {
       this.unsubscribeFromCoordinationUpdates(subscriptionId);
     }
