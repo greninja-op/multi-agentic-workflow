@@ -35,7 +35,10 @@
     return node;
   };
   const initials = (name) =>
-    Array.from(name || "?").slice(0, 2).join("").toUpperCase();
+    Array.from(name || "?")
+      .slice(0, 2)
+      .join("")
+      .toUpperCase();
 
   function render() {
     const vm = state?.viewModel;
@@ -61,7 +64,9 @@
     const list = document.getElementById("member-list");
     list.replaceChildren();
     if (members.length === 0) {
-      list.append(text(el("div", "empty"), "No team members are currently visible."));
+      list.append(
+        text(el("div", "empty"), "No team members are currently visible."),
+      );
     }
     for (const member of members) {
       const button = el(
@@ -79,7 +84,9 @@
       copy.style.minWidth = "0";
       copy.append(text(el("div", "member-name"), member.memberId));
       const activity = member.activityKnown
-        ? member.files.length + " active file" + (member.files.length === 1 ? "" : "s")
+        ? member.files.length +
+          " active file" +
+          (member.files.length === 1 ? "" : "s")
         : "No activity reported";
       copy.append(
         text(
@@ -142,14 +149,19 @@
     for (const task of member.tasks) {
       const card = el("article", "card");
       card.append(
-        text(el("div", "card-title"), task.description || "Undescribed coordination task"),
+        text(
+          el("div", "card-title"),
+          task.description || "Undescribed coordination task",
+        ),
       );
       const body = el("div", "card-body");
       const paths = [
         ...task.modifyPaths.map((path) => "Modify: " + path),
         ...task.createPaths.map((path) => "Create: " + path),
       ];
-      card.append(text(body, paths.length ? paths.join("\n") : "No paths recorded."));
+      card.append(
+        text(body, paths.length ? paths.join("\n") : "No paths recorded."),
+      );
       tasks.append(card);
     }
     detail.append(tasks);
@@ -160,7 +172,9 @@
       files.append(
         text(
           el("div", "empty"),
-          member.activityKnown ? "No active files." : "No activity metadata reported yet.",
+          member.activityKnown
+            ? "No active files."
+            : "No activity metadata reported yet.",
         ),
       );
     }
@@ -178,10 +192,17 @@
 
     const diff = el("div", "section");
     const isLocalMember = member.memberId === state.selfMemberId;
-    diff.append(text(el("h3"), isLocalMember ? "Your local diff preview" : "Teammate diff preview"));
+    diff.append(
+      text(
+        el("h3"),
+        isLocalMember ? "Your local diff preview" : "Teammate diff preview",
+      ),
+    );
     if (!isLocalMember) {
       const paths = member.files.map((file) => file.path).slice(0, 3);
-      const pathText = paths.length ? " Current activity: " + paths.join(", ") + "." : "";
+      const pathText = paths.length
+        ? " Current activity: " + paths.join(", ") + "."
+        : "";
       diff.append(
         text(
           el("div", "privacy"),
@@ -211,7 +232,9 @@
       const pre = el("pre", "diff-preview");
       for (const line of preview.lines) {
         const row = el("div", "diff-line " + line.kind);
-        row.append(text(el("span", "diff-prefix"), diffPrefix[line.kind] || " "));
+        row.append(
+          text(el("span", "diff-prefix"), diffPrefix[line.kind] || " "),
+        );
         row.append(text(el("span"), line.text));
         pre.append(row);
       }

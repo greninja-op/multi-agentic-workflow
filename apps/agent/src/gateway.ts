@@ -98,7 +98,9 @@ export interface HostGateway extends EventEmitter {
    */
   askLuna?(
     payload: LunaRequestPayload,
-  ): Promise<{ ok: true; reply: LunaReplyDto } | { ok: false; error: EnvelopeError }>;
+  ): Promise<
+    { ok: true; reply: LunaReplyDto } | { ok: false; error: EnvelopeError }
+  >;
 }
 
 function offlineError(type: string): TransmitResult {

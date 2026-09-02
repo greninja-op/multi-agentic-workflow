@@ -686,7 +686,11 @@ export class CoordinationServer {
    */
   private deliverMessage(
     session: SessionId,
-    update: { op: "added" | "updated"; message: MessageDto; audience: "all" | string[] },
+    update: {
+      op: "added" | "updated";
+      message: MessageDto;
+      audience: "all" | string[];
+    },
   ): void {
     const set = this.bySession.get(sessionKey(session));
     if (set === undefined) return;

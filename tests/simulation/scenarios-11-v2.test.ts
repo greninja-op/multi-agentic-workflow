@@ -88,7 +88,10 @@ describe("Scenario 11 — end-to-end V2 collaboration (messages → task → app
     // 3) Phase 2 — Bob approves it, then reports progress; it enters his task list.
     await ok(bobPort.respondTask({ taskId: assigned.taskId, accept: true }));
     await ok(
-      bobPort.updateTaskProgress({ taskId: assigned.taskId, status: "in_progress" }),
+      bobPort.updateTaskProgress({
+        taskId: assigned.taskId,
+        status: "in_progress",
+      }),
     );
     await pollUntil(async () => {
       const tasks = await ok(bobPort.listTasks({ session }));

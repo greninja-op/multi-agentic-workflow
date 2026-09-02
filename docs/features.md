@@ -151,7 +151,7 @@ the Host. The returned activity is coordination metadata, never source files or 
 
 ## 2b. Collaboration layer (V2)
 
-V2 extends coordination *awareness* into coordination *action*. Every feature reuses the V1
+V2 extends coordination _awareness_ into coordination _action_. Every feature reuses the V1
 authority, identity, ordering, and persistence, and each is available to coding agents through
 MCP tools. Nothing here shares source content except the explicitly opt-in live diffs.
 
@@ -165,7 +165,7 @@ credentials, and paths outside the repository. MCP: `send_message`, `list_messag
 
 ### 2b.2 Tasks & approvals
 
-A task is assigned to a member as a *proposal*; the assignee approves or rejects it before it
+A task is assigned to a member as a _proposal_; the assignee approves or rejects it before it
 enters their task list, then advances it to `in_progress`/`done`. Only the assignee responds
 and reports progress. MCP: `assign_task`, `respond_to_task`, `update_task_progress`,
 `list_tasks`.

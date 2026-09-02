@@ -72,7 +72,12 @@ describe("V2 messaging over WSS (Req 1.1–1.4)", () => {
     a.sendEvent(
       signedEvent(
         "message.send",
-        { kind: "direct", toMemberId: "bob", priority: "urgent", body: "check payments.ts" },
+        {
+          kind: "direct",
+          toMemberId: "bob",
+          priority: "urgent",
+          body: "check payments.ts",
+        },
         { session, device: alice, counter: a.nextCounter(), eventId: "m-1" },
       ),
     );
@@ -121,16 +126,29 @@ describe("V2 messaging over WSS (Req 1.1–1.4)", () => {
     a.sendEvent(
       signedEvent(
         "message.send",
-        { kind: "question", toMemberId: "bob", body: "which branch is prod?", correlationId: "c-1" },
+        {
+          kind: "question",
+          toMemberId: "bob",
+          body: "which branch is prod?",
+          correlationId: "c-1",
+        },
         { session, device: alice, counter: a.nextCounter(), eventId: "q-1" },
       ),
     );
-    await b.waitFor((m) => m?.type === "message.update" && m.payload.message.messageId === "q-1");
+    await b.waitFor(
+      (m) =>
+        m?.type === "message.update" && m.payload.message.messageId === "q-1",
+    );
 
     b.sendEvent(
       signedEvent(
         "message.send",
-        { kind: "answer", toMemberId: "alice", body: "main", correlationId: "c-1" },
+        {
+          kind: "answer",
+          toMemberId: "alice",
+          body: "main",
+          correlationId: "c-1",
+        },
         { session, device: bob, counter: b.nextCounter(), eventId: "a-1" },
       ),
     );
@@ -181,7 +199,8 @@ describe("V2 messaging over WSS (Req 1.1–1.4)", () => {
     );
 
     const delivered = await b2.waitFor(
-      (m) => m?.type === "message.update" && m.payload.message.messageId === "m-off",
+      (m) =>
+        m?.type === "message.update" && m.payload.message.messageId === "m-off",
     );
     expect(delivered.payload.message.body).toBe("offline note");
 

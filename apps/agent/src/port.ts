@@ -149,8 +149,7 @@ export class AgentCoordinationPort implements AgentPort {
   private connectedMembers: string[];
   private offlineMembers: string[];
   private readonly localDiff:
-    | ((path: string) => string | Promise<string>)
-    | undefined;
+    ((path: string) => string | Promise<string>) | undefined;
 
   private subscriptionSeq = 0;
   private readonly subscriptions = new Map<
@@ -178,9 +177,7 @@ export class AgentCoordinationPort implements AgentPort {
   }): void => {
     this.view.applyLiveness(this.session, payload.memberId, payload.state);
   };
-  private readonly onGatewayNotification = (
-    payload: NotificationDto,
-  ): void => {
+  private readonly onGatewayNotification = (payload: NotificationDto): void => {
     this.view.applyNotification(this.session, payload);
   };
   private readonly onGatewayDiff = (payload: {
@@ -610,9 +607,7 @@ export class AgentCoordinationPort implements AgentPort {
       type: "message.send",
       payload: {
         kind: req.kind,
-        ...(req.toMemberId !== undefined
-          ? { toMemberId: req.toMemberId }
-          : {}),
+        ...(req.toMemberId !== undefined ? { toMemberId: req.toMemberId } : {}),
         ...(req.priority !== undefined ? { priority: req.priority } : {}),
         body: req.body,
         ...(req.correlationId !== undefined
@@ -639,10 +634,7 @@ export class AgentCoordinationPort implements AgentPort {
     return {
       ok: true,
       data: {
-        messages: this.view.messagesForMember(
-          this.session,
-          this.self.memberId,
-        ),
+        messages: this.view.messagesForMember(this.session, this.self.memberId),
         unreadCount: this.view.unreadForMember(
           this.session,
           this.self.memberId,
@@ -775,7 +767,10 @@ export class AgentCoordinationPort implements AgentPort {
     if (!this.authorized) {
       return this.notAuthorized();
     }
-    return { ok: true, data: { members: this.view.livenessStates(this.session) } };
+    return {
+      ok: true,
+      data: { members: this.view.livenessStates(this.session) },
+    };
   }
 
   async wake(req: WakeRequest): Promise<AgentResult<WakeData>> {

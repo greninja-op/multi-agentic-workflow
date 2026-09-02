@@ -128,10 +128,7 @@ export class AgentView {
   }
 
   /** Restore the message view from a snapshot's messages (reconnect, Req X.2). */
-  loadMessages(
-    session: SessionId,
-    messages: readonly MessageDto[],
-  ): void {
+  loadMessages(session: SessionId, messages: readonly MessageDto[]): void {
     this.messages.restore(session, messages);
   }
 
@@ -153,10 +150,7 @@ export class AgentView {
   }
 
   /** Proposed tasks awaiting `memberId`'s approval (Req 2.2). */
-  incomingProposalsForMember(
-    session: SessionId,
-    memberId: string,
-  ): TaskDto[] {
+  incomingProposalsForMember(session: SessionId, memberId: string): TaskDto[] {
     return this.tasks.incomingProposalsFor(session, memberId);
   }
 
@@ -207,7 +201,11 @@ export class AgentView {
   // ---- V2 live diffs (Phase 5; Req 5.1–5.3) --------------------------------
 
   /** Apply a host `diff.update` (shared/removed) to the live-diff view. */
-  applyDiff(session: SessionId, op: "shared" | "removed", diff: LiveDiffDto): void {
+  applyDiff(
+    session: SessionId,
+    op: "shared" | "removed",
+    diff: LiveDiffDto,
+  ): void {
     if (op === "removed") {
       this.diffs.remove(session, diff.member.memberId, diff.path);
       return;
@@ -237,7 +235,10 @@ export class AgentView {
     if (response.kind === "snapshot") {
       this.messages.restore(session, response.snapshot.messages ?? []);
       this.tasks.restore(session, response.snapshot.tasks ?? []);
-      this.notifications.restore(session, response.snapshot.notifications ?? []);
+      this.notifications.restore(
+        session,
+        response.snapshot.notifications ?? [],
+      );
       this.diffs.restore(session, response.snapshot.diffs ?? []);
     }
   }

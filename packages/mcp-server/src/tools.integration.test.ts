@@ -365,10 +365,10 @@ describe("V2 messaging tools (Phase 1; Req 1.1–1.4)", () => {
 
   it("sends a message and lists it back (own message not counted unread)", async () => {
     harness = await connectHarness();
-    const sent = await harness.call<{ messageId: string; eventRevision: number }>(
-      "send_message",
-      { session, kind: "broadcast", body: "standup in 5" },
-    );
+    const sent = await harness.call<{
+      messageId: string;
+      eventRevision: number;
+    }>("send_message", { session, kind: "broadcast", body: "standup in 5" });
     expect(sent.ok).toBe(true);
     expect(typeof sent.data?.messageId).toBe("string");
 
@@ -467,16 +467,24 @@ describe("V2 task tools (Phase 2; Req 2.1–2.3)", () => {
     });
     const taskId = assigned.data!.taskId;
 
-    expect((await harness.call("respond_to_task", { taskId, accept: true })).ok).toBe(true);
     expect(
-      (await harness.call("update_task_progress", { taskId, status: "in_progress" })).ok,
+      (await harness.call("respond_to_task", { taskId, accept: true })).ok,
+    ).toBe(true);
+    expect(
+      (
+        await harness.call("update_task_progress", {
+          taskId,
+          status: "in_progress",
+        })
+      ).ok,
     ).toBe(true);
 
-    const listed = await harness.call<{ myTaskList: Array<{ status: string }> }>(
-      "list_tasks",
-      { session },
-    );
-    expect(listed.data?.myTaskList.map((t) => t.status)).toEqual(["in_progress"]);
+    const listed = await harness.call<{
+      myTaskList: Array<{ status: string }>;
+    }>("list_tasks", { session });
+    expect(listed.data?.myTaskList.map((t) => t.status)).toEqual([
+      "in_progress",
+    ]);
   });
 
   it("returns OFFLINE_QUEUED for assign_task while offline (Req 4.8)", async () => {
@@ -506,7 +514,9 @@ describe("V2 liveness/notification/wake tools (Phase 3; Req 3.1–3.3)", () => {
     }>("get_liveness", { session });
     expect(live.ok).toBe(true);
     // self (u-1) is connected + just acted → active.
-    expect(live.data?.members.find((m) => m.memberId === "u-1")?.state).toBe("active");
+    expect(live.data?.members.find((m) => m.memberId === "u-1")?.state).toBe(
+      "active",
+    );
   });
 
   it("records a wake as a notification the target can read", async () => {
@@ -520,7 +530,11 @@ describe("V2 liveness/notification/wake tools (Phase 3; Req 3.1–3.3)", () => {
     expect(woke.ok).toBe(true);
 
     const notifs = await harness.call<{
-      notifications: Array<{ source: string; severity: string; summary: string }>;
+      notifications: Array<{
+        source: string;
+        severity: string;
+        summary: string;
+      }>;
     }>("get_notifications", { session });
     expect(notifs.ok).toBe(true);
     const wake = notifs.data?.notifications.find((n) => n.source === "wake");
@@ -563,10 +577,14 @@ describe("V2 liveness/notification/wake tools (Phase 3; Req 3.1–3.3)", () => {
 
   it("share_diff stores a diff that list_diffs then returns (Req 5.1–5.5)", async () => {
     harness = await connectHarness();
-    const shared = await harness.call<{ eventRevision: number; shared: boolean }>(
-      "share_diff",
-      { session, path: "src/api.ts", patch: "@@ -1 +1 @@\n-old\n+new" },
-    );
+    const shared = await harness.call<{
+      eventRevision: number;
+      shared: boolean;
+    }>("share_diff", {
+      session,
+      path: "src/api.ts",
+      patch: "@@ -1 +1 @@\n-old\n+new",
+    });
     expect(shared.ok).toBe(true);
     expect(shared.data?.shared).toBe(true);
 

@@ -485,9 +485,9 @@ export function buildCoordinationViewModel(
       summary: n.summary,
       refId: n.refId,
     })),
-    urgentNotificationCount: (snapshot.notifications?.notifications ?? []).filter(
-      (n) => n.severity === "urgent",
-    ).length,
+    urgentNotificationCount: (
+      snapshot.notifications?.notifications ?? []
+    ).filter((n) => n.severity === "urgent").length,
     lunaLastReply:
       snapshot.luna !== undefined
         ? {

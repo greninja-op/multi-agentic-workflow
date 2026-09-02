@@ -2,14 +2,14 @@
 
 This folder is the complete, technology-free plan for CFLS: a **real-time collaboration fabric for many AI coding agents (and their humans) working the same repository at once** — dividing work up front, seeing each other live, talking to each other, and merging cleanly.
 
-> **Status: planning / blueprint.** `idea.md`, `architecture.md`, and `decisions.md` define *what* the system is and *how it behaves* (technology-free). **`stack.md`** defines the chosen technology: a **full rewrite with a Rust core** (Host + Service), a **TypeScript + Svelte** extension, an **in-process MCP** bridge, and **QUIC** on the wire.
+> **Status: planning / blueprint.** `idea.md`, `architecture.md`, and `decisions.md` define _what_ the system is and _how it behaves_ (technology-free). **`stack.md`** defines the chosen technology: a **full rewrite with a Rust core** (Host + Service), a **TypeScript + Svelte** extension, an **in-process MCP** bridge, and **QUIC** on the wire.
 
 ## Read in this order
 
-1. **[idea.md](./idea.md)** — the problem, the objective, the core idea, the full feature set, what each feature solves, principles, non-goals, and success criteria. *Start here.*
+1. **[idea.md](./idea.md)** — the problem, the objective, the core idea, the full feature set, what each feature solves, principles, non-goals, and success criteria. _Start here._
 2. **[architecture.md](./architecture.md)** — the full A→Z blueprint: components, actors, identity/addressing, what's captured and from where, awareness vs. intent, the diff mechanism, messaging, tasks, the delivery model, the agent playbook, Luna the orchestrator, liveness & notifications, the human role, how it prevents PR conflicts, failure/edge cases, security model, reuse vs. build, build order, open items, and end-to-end walkthroughs.
 3. **[decisions.md](./decisions.md)** — the decision log: every decision we made, the option chosen, the alternatives considered, and the reasoning.
-4. **[stack.md](./stack.md)** — the complete technology stack (A→Z): languages, the Rust workspace, transport/connectivity (QUIC + local IPC), serialization, persistence, crypto, MCP, Luna, the extension/panel, build/CI, packaging, testing, the dependency map, and the rewrite path. *(Decision: full rewrite, Rust core, top-tier, latency-first.)*
+4. **[stack.md](./stack.md)** — the complete technology stack (A→Z): languages, the Rust workspace, transport/connectivity (QUIC + local IPC), serialization, persistence, crypto, MCP, Luna, the extension/panel, build/CI, packaging, testing, the dependency map, and the rewrite path. _(Decision: full rewrite, Rust core, top-tier, latency-first.)_
 5. **[glossary.md](./glossary.md)** — plain definitions of every term.
 
 ## The idea in one paragraph

@@ -77,7 +77,9 @@ export class DiffRegistry {
     path: string,
   ): LiveDiffDto | undefined {
     const diff = this.mapFor(session).get(diffKey(memberId, path));
-    return diff === undefined ? undefined : { ...diff, member: { ...diff.member } };
+    return diff === undefined
+      ? undefined
+      : { ...diff, member: { ...diff.member } };
   }
 
   /** Every current diff for a path, ordered by `eventRevision` then memberId. */

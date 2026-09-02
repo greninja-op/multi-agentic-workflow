@@ -63,9 +63,7 @@ export class NotificationRegistry {
 
   /** Pending wake requests addressed to `memberId` (Req 3.3). */
   pendingWakesFor(session: SessionId, memberId: string): NotificationDto[] {
-    return this.forMember(session, memberId).filter(
-      (n) => n.source === "wake",
-    );
+    return this.forMember(session, memberId).filter((n) => n.source === "wake");
   }
 
   /** Every notification recorded for a session (ordered by `eventRevision`). */

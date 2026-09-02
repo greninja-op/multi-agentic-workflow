@@ -92,7 +92,12 @@ describe("V2 notifications & wake over WSS (Req 3.2, 3.3)", () => {
     a.sendEvent(
       signedEvent(
         "message.send",
-        { kind: "direct", toMemberId: "bob", priority: "urgent", body: "prod is down" },
+        {
+          kind: "direct",
+          toMemberId: "bob",
+          priority: "urgent",
+          body: "prod is down",
+        },
         { session, device: alice, counter: a.nextCounter(), eventId: "m-1" },
       ),
     );

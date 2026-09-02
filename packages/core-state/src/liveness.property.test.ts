@@ -22,7 +22,10 @@ const session: SessionId = {
 const WINDOW = 60_000;
 
 test(
-  propertyTag(19, "liveness is gone without connection, else active/idle by window"),
+  propertyTag(
+    19,
+    "liveness is gone without connection, else active/idle by window",
+  ),
   () => {
     assertProperty(
       fc.property(

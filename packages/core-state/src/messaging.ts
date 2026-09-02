@@ -144,9 +144,7 @@ export class MessageRegistry {
     if (message.kind === "answer" && message.correlationId !== undefined) {
       const questionId = state.openQuestions.get(message.correlationId);
       if (questionId !== undefined) {
-        const question = state.messages.find(
-          (m) => m.messageId === questionId,
-        );
+        const question = state.messages.find((m) => m.messageId === questionId);
         if (question !== undefined) {
           question.answered = true;
           answeredQuestion = question;
@@ -196,8 +194,10 @@ export class MessageRegistry {
   /** Has `memberId` read the message `messageId`? */
   isRead(session: SessionId, messageId: string, memberId: string): boolean {
     return (
-      this.sessions.get(sessionKey(session))?.read.get(messageId)?.has(memberId) ??
-      false
+      this.sessions
+        .get(sessionKey(session))
+        ?.read.get(messageId)
+        ?.has(memberId) ?? false
     );
   }
 

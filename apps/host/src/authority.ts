@@ -2035,7 +2035,10 @@ export class CoordinationAuthority {
   // -------------------------------------------------------------------------
 
   /** Set the live member roster used for liveness derivation (Req 3.1). */
-  setLiveRoster(session: SessionId, connectedMemberIds: Iterable<string>): void {
+  setLiveRoster(
+    session: SessionId,
+    connectedMemberIds: Iterable<string>,
+  ): void {
     this.liveness.setConnected(session, connectedMemberIds);
   }
 
@@ -2067,7 +2070,8 @@ export class CoordinationAuthority {
     nowMs: number = Date.now(),
   ): LivenessBroadcast[] {
     const key = sessionKey(session);
-    const previous = this.lastLiveness.get(key) ?? new Map<string, LivenessState>();
+    const previous =
+      this.lastLiveness.get(key) ?? new Map<string, LivenessState>();
     const current = new Map<string, LivenessState>();
     const changes: LivenessBroadcast[] = [];
     const revision = this.revisions.highest(session);
@@ -2109,7 +2113,8 @@ export class CoordinationAuthority {
   /** The admitted, non-revoked member ids for a session (for Luna context). */
   private sessionMemberIds(session: SessionId): string[] {
     const seen = new Set<string>();
-    for (const entry of this.membershipBySession.get(sessionKey(session)) ?? []) {
+    for (const entry of this.membershipBySession.get(sessionKey(session)) ??
+      []) {
       if (entry.invitationValid && !entry.revoked) {
         seen.add(entry.memberId);
       }

@@ -34,6 +34,7 @@ The system has three kinds of participants (humans, the orchestrator "Luna", and
 ```
 
 **Mental model:**
+
 - Each **machine** runs an always-awake **Service** — the local muscle that watches the workspace, holds the one connection outward, and routes messages/mail.
 - Each **IDE** runs an **Extension** — the live sensor inside the editor and the human's control panel.
 - Each **agent** talks to its local Service through the **Agent Interface** (a tool-based protocol) — this is the agent's "voice."
@@ -46,7 +47,7 @@ The critical fact that shapes the whole design: **a machine is always awake, but
 ## 2. Actors
 
 - **Humans (directors).** Set direction, assign big work, approve incoming assignments, watch live status, wake idle agents, step in on conflicts.
-- **Luna (orchestrator / PM).** One central orchestrator agent. Assigns/routes tasks by judgment, arbitrates conflicts rules can't settle, answers cross-agent questions, and summarizes team state for humans. It *proposes*; humans *approve*.
+- **Luna (orchestrator / PM).** One central orchestrator agent. Assigns/routes tasks by judgment, arbitrates conflicts rules can't settle, answers cross-agent questions, and summarizes team state for humans. It _proposes_; humans _approve_.
 - **Agents (workers).** Do the building. Self-coordinate small things; receive big things from humans via Luna. Follow a fixed "playbook" (§13) that makes coordination part of their normal work loop.
 
 ---
@@ -54,7 +55,9 @@ The critical fact that shapes the whole design: **a machine is always awake, but
 ## 3. The four components
 
 ### 3.1 Service (per machine — "C1", "C2", …)
+
 Always-on background process. **The local hub.** Responsibilities:
+
 - Watch the workspace on disk: file create/modify/delete/rename — **including changes made outside the IDE**.
 - Read git ground truth: current branch, HEAD, working-tree changes, staged/unstaged, ahead/behind.
 - Hold the **single connection** to the Host; send/receive all coordination traffic.
@@ -66,18 +69,23 @@ Always-on background process. **The local hub.** Responsibilities:
 > The Service is deliberately "dumb muscle": sensing, routing, persistence. It does not make orchestration decisions — Luna does.
 
 ### 3.2 Extension (per IDE)
+
 The **live sensor inside the editor** and the **human's control surface**. Responsibilities:
-- Observe editor activity in real time (see §5 for the exact list): focused file, live *unsaved* edits with exact ranges, open tabs, terminal commands + output, errors/warnings.
+
+- Observe editor activity in real time (see §5 for the exact list): focused file, live _unsaved_ edits with exact ranges, open tabs, terminal commands + output, errors/warnings.
 - Stream those signals to the local Service.
 - Render the **status bar item** (compact live status) and the **panel** (full status, chat to Luna, notifications, approvals).
 - Play notifications (with sound, by severity) and offer the "resume this agent" action.
 - Talk **only** to the local Service — never directly to the Host.
 
 ### 3.3 Agent Interface (per machine)
+
 The **agent's voice** — a tool-based protocol the AI agents call. It exposes the coordination tools (checkpoint, sync, send message, ask-and-wait, declare intent, get status, etc.). It talks only to the local Service, which routes to the Host. It carries the things that **cannot be observed**: the agent's plans, intended new files, and messages.
 
 ### 3.4 Host + Luna (one, central)
+
 The **single source of truth**:
+
 - Assigns a strict, total order to every coordination event (so everyone converges on one identical picture).
 - Owns identity, membership (who may join), and broadcast (fan changes out to the right participants).
 - Persists state; restores it after a restart; serves reconnecting machines the events they missed.
@@ -102,9 +110,10 @@ There is exactly **one** Host + Luna per session. Never one per machine — that
 
 ## 5. What we capture, and from where
 
-Two sensors feed the picture. They overlap on file edits on purpose: the Extension gives the *fast, live, pre-save* nuance; the Service gives the *authoritative, on-disk, git* truth.
+Two sensors feed the picture. They overlap on file edits on purpose: the Extension gives the _fast, live, pre-save_ nuance; the Service gives the _authoritative, on-disk, git_ truth.
 
 ### 5.1 Extension captures (live, in-IDE, often before save)
+
 - Focused file; open tabs; visible editors; tab switches.
 - **Live unsaved edits** with exact changed line ranges; cursor position; selection → "actively editing `auth.ts`, around line 40, right now."
 - Open / close / save events.
@@ -113,17 +122,20 @@ Two sensors feed the picture. They overlap on file edits on purpose: the Extensi
 - Debug sessions and running tasks.
 
 ### 5.2 Service captures (ground truth, whole folder, even IDE closed)
+
 - Every on-disk change (create/modify/delete/rename), including changes made outside the IDE.
 - Git truth: branch, HEAD, working-tree diff (the actual changes), staged/unstaged, ahead/behind vs remote.
 - Repo structure (for risk/impact hints), if enabled.
 
 ### 5.3 Agent-declared (via the Agent Interface — the unobservable stuff)
+
 - **Intent:** "I'm about to work on the auth area" (one declaration per task, coarse).
 - **Planned new files:** files that don't exist yet and therefore can't be observed.
 - **Messages** to other agents.
 - **Task updates:** picking up / completing tasks.
 
 ### 5.4 Division rule of thumb
+
 > **Extension = "what's happening in the editor right now."** **Service = "what's true on disk and in git."** **Agent Interface = "what the agent intends and says."**
 
 The Service is the authority; the Extension is the fast, rich sensor; the Agent Interface fills the observability gap. The Service merges all three into one **live workspace state** and publishes it.
@@ -133,6 +145,7 @@ The Service is the authority; the Extension is the fast, rich sensor; the Agent 
 ## 6. The live workspace state
 
 The single merged picture, kept in sync for every participant, contains:
+
 - **Per file / area:** who is active on it, live changes forming, errors present.
 - **Per agent:** its address (`C?/A?`), current activity, declared intent, liveness (§15), current task.
 - **Per system:** which agents it hosts, connectivity.
@@ -147,18 +160,19 @@ Because the Host assigns a strict order to every change, every machine's copy co
 We do **not** make agents lock every file — that would waste time and effort. Instead:
 
 - **Awareness = automatic & free.** The Service + Extension detect which files are being touched. No agent action required. This answers "who's working on what right now" for the whole team.
-- **Intent = one cheap declaration per task.** The agent states its plan once at the start of a task (a folder or a short list). This is *proactive* (prevents collisions before they form) and also covers **new files that don't exist yet** (which detection can't see).
+- **Intent = one cheap declaration per task.** The agent states its plan once at the start of a task (a folder or a short list). This is _proactive_ (prevents collisions before they form) and also covers **new files that don't exist yet** (which detection can't see).
 - **Explicit locks = rare.** Only for the handful of files where two people editing simultaneously is catastrophic (e.g., a migration, a shared config). Used only when flagged as high-risk.
 
-Why intent on top of auto-detection: detection only knows *after* a change hits disk (too late to prevent), and cannot know about files not yet created. The single upfront intent declaration closes both gaps cheaply.
+Why intent on top of auto-detection: detection only knows _after_ a change hits disk (too late to prevent), and cannot know about files not yet created. The single upfront intent declaration closes both gaps cheaply.
 
 ---
 
 ## 8. The diff mechanism
 
-We build **our own diff pipeline** (not our own diff *math* — the underlying text-diff computation uses a proven approach). Ours is better than polling git because it has a **live layer**:
+We build **our own diff pipeline** (not our own diff _math_ — the underlying text-diff computation uses a proven approach). Ours is better than polling git because it has a **live layer**:
 
 Three layers, from freshest to most durable:
+
 1. **Unsaved edits (from the Extension):** exact change ranges as the agent types — the freshest, real-time layer. This is the "live diff" nobody else has.
 2. **Saved-on-disk (from the Service):** what actually hit the file.
 3. **Committed (from git, via the Service):** the baseline everyone shares.
@@ -170,6 +184,7 @@ The pipeline **streams the live editor changes** and **reconciles them against t
 ## 9. Content sharing policy
 
 The system shares **team content** — this is a deliberate choice, because it is the team's own machines, own repo, and invited members only:
+
 - **Shared within the team:** project diffs/changes, messages, plans, task lists, status.
 - **Never shared (always blocked):** secrets, credentials, environment files, keys, and anything **outside the project folder**.
 
@@ -198,7 +213,7 @@ So the rule is: **"share team work, never leak secrets or out-of-tree content."*
   - **Small things** — agents self-coordinate among themselves (quick handoffs, "you take this file, I'll take that").
   - **Big things (features, major tasks)** — always come from **humans via Luna**. Agents never autonomously carve up big features.
 - **Assignment flow (human-directed):**
-  1. A human opens the panel chat and types plain language, e.g. *"tell C2 to do the WhatsApp integration."*
+  1. A human opens the panel chat and types plain language, e.g. _"tell C2 to do the WhatsApp integration."_
   2. **Luna** interprets it, picks the best agent on C2 (by workload/complexity/context), and drafts a task.
   3. **The receiving machine's human (C2's human) is notified and approves** — consent for work landing on their machine. (In solo/hackathon mode this can be auto-approve.)
   4. On approval, the task is written to that agent's task file and picked up on its next checkpoint (§13).
@@ -211,9 +226,9 @@ So the rule is: **"share team work, never leak secrets or out-of-tree content."*
 
 Three delivery modes, matched to urgency:
 
-1. **Checkpoint piggyback (the default, near-free).** The agent's playbook (§13) makes it call `checkpoint(files)` before editing. The reply carries, stapled on: pending mail, tasks, and "who else is on these files." Because editing is frequent, delivery is frequent — and it lands *exactly* when it matters (right before touching a file). No separate "check messages" step, no wasted turns.
-2. **Ask-and-wait (needs an answer now).** When an agent needs a decision before proceeding, it sends the question and *chooses* to wait. The call **returns the instant the reply lands** (not on a fixed poll interval). Always bounded by a timeout — never an infinite block.
-3. **Idle bridge (reach a sleeping agent).** A message to an idle agent is queued to its mailbox (delivered on its next checkpoint) **and** raises a notification to that machine's human (§15). The human can resume the agent. Other agents can *see* the agent is idle and plan around it (do other work, escalate to Luna, or ask the human).
+1. **Checkpoint piggyback (the default, near-free).** The agent's playbook (§13) makes it call `checkpoint(files)` before editing. The reply carries, stapled on: pending mail, tasks, and "who else is on these files." Because editing is frequent, delivery is frequent — and it lands _exactly_ when it matters (right before touching a file). No separate "check messages" step, no wasted turns.
+2. **Ask-and-wait (needs an answer now).** When an agent needs a decision before proceeding, it sends the question and _chooses_ to wait. The call **returns the instant the reply lands** (not on a fixed poll interval). Always bounded by a timeout — never an infinite block.
+3. **Idle bridge (reach a sleeping agent).** A message to an idle agent is queued to its mailbox (delivered on its next checkpoint) **and** raises a notification to that machine's human (§15). The human can resume the agent. Other agents can _see_ the agent is idle and plan around it (do other work, escalate to Luna, or ask the human).
 
 **Latency reasoning:** the network is fast (sub-second). The real latency is "when does the receiver next act." During active work that is seconds; for urgent handshakes, ask-and-wait is effectively instant; for idle agents, it is bounded by the human's response to the alert.
 
@@ -224,14 +239,17 @@ Three delivery modes, matched to urgency:
 This is the behavior contract shipped as a rules/instructions file so **every** agent follows it. It makes coordination part of the agent's normal work loop rather than an optional extra.
 
 **Before editing any file → `checkpoint(files)`:**
+
 1. If a teammate is live-editing one of these files → **don't touch it**; work elsewhere or coordinate.
 2. Read any pending messages/tasks addressed to me; act on them.
 3. If my planned change conflicts with someone's declared intent → send a heads-up, or ask Luna.
 
 **After finishing a task → `sync()`:**
+
 - Publish what I did, mark my task done, pull my next task.
 
 **When I need someone else's decision → `ask_and_wait` (bounded):**
+
 - If no answer in time → Luna decides.
 
 **When I start a task → declare intent once** (the area / short file list, plus any new files I plan to create).
@@ -243,9 +261,11 @@ This playbook is what turns "we can observe collisions" into "we prevent them," 
 ## 14. Luna — the orchestrator
 
 ### 14.1 Placement
+
 **One Luna per session, at the Host.** The Host already has every agent's activity, intent, and presence — exactly the context Luna needs — and being central avoids conflicting decisions. Each machine's Service stays dumb; Luna is the single brain / PM.
 
 ### 14.2 Rules-first hybrid (do NOT put the LLM in the hot path of everything)
+
 - **Deterministic rules handle the mechanical ~90%** (instant, free): event ordering, who-holds-what, presence, simple routing ("deliver this to C2"), obvious "whoever is already in that area takes it."
 - **Luna handles only the judgment calls** (worth an LLM's reasoning):
   - **Task assignment** by workload/complexity — e.g., a complex task → the agent already deep in complex work; a simple task → an agent doing simple things; balance load; match context.
@@ -255,12 +275,15 @@ This playbook is what turns "we can observe collisions" into "we prevent them," 
   - **Summarizing** the live team state for humans in plain language.
 
 ### 14.3 Proposes, humans dispose
+
 Luna **proposes**; the receiving machine's human **approves** assignments (§11). Luna never silently commits big work to someone's machine.
 
 ### 14.4 Graceful degradation
-If Luna / the Host is unreachable, the system must **not freeze**. It falls back to **humans + simple rules**: awareness, messaging queues, and manual assignment keep working; Luna's judgment layer resumes when it returns. Luna is an *enhancer*, never a hard single point of failure for basic coordination.
+
+If Luna / the Host is unreachable, the system must **not freeze**. It falls back to **humans + simple rules**: awareness, messaging queues, and manual assignment keep working; Luna's judgment layer resumes when it returns. Luna is an _enhancer_, never a hard single point of failure for basic coordination.
 
 ### 14.5 Cost/quality stance
+
 We accept Luna's cost and latency where they buy reliability and quality (an explicit decision). We keep costs sane by (a) rules-first so Luna is only invoked for real judgment, and (b) human approval catching any bad proposal.
 
 ---
@@ -268,6 +291,7 @@ We accept Luna's cost and latency where they buy reliability and quality (an exp
 ## 15. Liveness & notifications
 
 ### 15.1 Two layers of liveness
+
 - **System liveness (C1):** is the machine's Service connected? `online` / `offline` (via heartbeat).
 - **Agent liveness (A1):** inferred from activity —
   - `active` — recent edits/checkpoints;
@@ -277,13 +301,15 @@ We accept Luna's cost and latency where they buy reliability and quality (an exp
 The whole session sees each agent's liveness, so a sender **knows** "A1 is idle, a reply may lag" and plans around it.
 
 ### 15.2 Priority → alert (with sound)
-| Priority | Example | On the target machine |
-|---|---|---|
-| `fyi` | "renamed getUser" | silent badge in the panel |
-| `normal` | task assigned / a question | soft sound + panel highlight |
-| `urgent` | someone is *blocked* on this agent | loud/repeating alert + prominent "resume agent" prompt |
+
+| Priority | Example                            | On the target machine                                  |
+| -------- | ---------------------------------- | ------------------------------------------------------ |
+| `fyi`    | "renamed getUser"                  | silent badge in the panel                              |
+| `normal` | task assigned / a question         | soft sound + panel highlight                           |
+| `urgent` | someone is _blocked_ on this agent | loud/repeating alert + prominent "resume agent" prompt |
 
 ### 15.3 Wake flow (reaching an idle agent)
+
 1. Message/task targets an idle `A1` on `C1`.
 2. It is queued to `A1`'s mailbox (delivered on `A1`'s next checkpoint — the normal path) **and** the Service raises a notification to `C1`'s human, at a severity/sound matching the message priority.
 3. The human hears/sees it and clicks **"resume A1"** → the agent is re-invoked and picks up its mail.
@@ -296,6 +322,7 @@ This converts the unavoidable "sleeping agent" limit into a clean human-in-the-l
 ## 16. Human role
 
 The human is the **director**:
+
 - Watches the whole team's live status in the panel.
 - Chats to Luna in plain language to assign big work and ask about state.
 - **Approves** work being assigned to their own machine.
@@ -317,7 +344,7 @@ Merge/PR conflicts form when two people unknowingly edit the same code. This des
 
 Result: collisions mostly never form, so merges stay clean **by construction** — and the expensive PR-conflict-untangling step largely disappears.
 
-> **Optional later extension:** coordinate merge *order* (per-member branches + coordinated integration) so even sequential merges never surprise each other. Not required for the core; noted for the future.
+> **Optional later extension:** coordinate merge _order_ (per-member branches + coordinated integration) so even sequential merges never surprise each other. Not required for the core; noted for the future.
 
 ---
 
@@ -345,6 +372,7 @@ Result: collisions mostly never form, so merges stay clean **by construction** �
 ## 20. What we reuse vs. build new
 
 ### Foundation already in place (reuse)
+
 - The central Host: strict event ordering, single-source-of-truth, broadcast, persistence, restart recovery.
 - Verifiable identity, invitation, and revocation.
 - Presence ("who's connected / on what").
@@ -353,6 +381,7 @@ Result: collisions mostly never form, so merges stay clean **by construction** �
 - The Extension/Service/Agent-Interface skeleton and the status-bar entry point.
 
 ### New work (build)
+
 - **Luna** the orchestrator (central) + the rules-first decision layer.
 - The **message & task model**: message kinds, priority, mailboxes, task files synced live.
 - The **live change-stream diff pipeline** (unsaved-edit stream reconciled with the git baseline).
@@ -389,19 +418,22 @@ Each phase rides the existing foundation (§20) and is independently demonstrabl
 ## 23. End-to-end walkthroughs
 
 ### 23.1 Two agents, one file (collision prevented)
+
 1. `C1/A1` starts a task; declares intent: "working on the login flow: `auth/`."
 2. `C1/A1` edits `auth/login.ts`; the Extension + Service detect it and publish live status.
 3. `C2/A1`, about to touch `auth/session.ts`, calls `checkpoint(["auth/session.ts"])`.
-4. The reply says: "`C1/A1` declared the auth flow and is live-editing `session.ts` — here is the live diff." 
+4. The reply says: "`C1/A1` declared the auth flow and is live-editing `session.ts` — here is the live diff."
 5. `C2/A1` picks different work or sends `C1/A1` a heads-up. **No collision forms; no PR conflict later.**
 
 ### 23.2 Human assigns a big task
+
 1. `C1`'s human types in the panel: "tell C2 to do the WhatsApp integration."
 2. Luna picks the best agent on `C2`, drafts the task.
 3. `C2`'s human gets a `normal` notification (soft sound): "Approve WhatsApp integration for `C2/A1`?" → approves.
 4. The task is written to `C2/A1`'s task file; `C2/A1` picks it up at its next checkpoint and starts.
 
 ### 23.3 Urgent question to an idle agent
+
 1. `C1/A1` is blocked: "changing the login API — `C2/A1`, safe to proceed?" → `ask_and_wait`, priority `urgent`.
 2. `C2/A1` is idle. The message is queued to its mailbox **and** `C2`'s human gets a loud alert: "resume `C2/A1` — teammate blocked."
 3. `C2`'s human resumes the agent; at its checkpoint it sees the question and answers.

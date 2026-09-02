@@ -1,0 +1,4 @@
+# Python Dependencies Example Template for CFLS Tools
+# Copy or rename to requirements.txt to install dependencies
+
+Pillow>=10.0.0

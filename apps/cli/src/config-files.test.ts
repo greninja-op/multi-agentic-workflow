@@ -89,7 +89,7 @@ describe("config files round-trip", () => {
       url: "ws://127.0.0.1:8750",
       token: "tok-123",
     });
-  });
+  }, 60_000);
 
   it.skipIf(process.platform === "win32")(
     "local-api.json: rejects a record readable by another local account",

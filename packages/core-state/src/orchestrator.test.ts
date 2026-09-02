@@ -45,7 +45,15 @@ describe("RulesLunaBrain — assign (Req 4.2)", () => {
   it("never assigns to the requester and prefers the least-busy active member", () => {
     const brain = new RulesLunaBrain();
     const tasks: TaskDto[] = [
-      { taskId: "t1", title: "x", description: "", assignee: { memberId: "bob", deviceId: "" }, assigner: alice, status: "in_progress", eventRevision: 1 },
+      {
+        taskId: "t1",
+        title: "x",
+        description: "",
+        assignee: { memberId: "bob", deviceId: "" },
+        assigner: alice,
+        status: "in_progress",
+        eventRevision: 1,
+      },
     ];
     const d = brain.decide(
       { action: "assign", prompt: "build the payments page" },
@@ -73,7 +81,11 @@ describe("RulesLunaBrain — arbitrate/answer/summarize (Req 4.3, 4.4)", () => {
   it("arbitrate states the deterministic earliest-revision rule", () => {
     const brain = new RulesLunaBrain();
     const d = brain.decide(
-      { action: "arbitrate", prompt: "who wins src/api.ts?", refId: "src/api.ts" },
+      {
+        action: "arbitrate",
+        prompt: "who wins src/api.ts?",
+        refId: "src/api.ts",
+      },
       ctx(),
     );
     expect(d.action).toBe("arbitrate");
@@ -103,7 +115,9 @@ describe("RulesLunaBrain — arbitrate/answer/summarize (Req 4.3, 4.4)", () => {
 
 describe("LlmLunaBrain (Req 4.1.3, 4.1.4)", () => {
   it("delegates structure to rules and enriches the summary text", async () => {
-    const brain = new LlmLunaBrain(async () => "Assigning the logout work to Carol.");
+    const brain = new LlmLunaBrain(
+      async () => "Assigning the logout work to Carol.",
+    );
     const d = await brain.decide(
       { action: "assign", prompt: "tell carol to add logout" },
       ctx(),

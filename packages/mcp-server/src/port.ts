@@ -528,9 +528,7 @@ export interface AgentPort {
 
   // V2 tasks (Phase 2; Req 2.1–2.3). Assign/respond/progress are mutations
   // (OFFLINE_QUEUED while offline); `listTasks` reads succeed offline.
-  assignTask(
-    req: AssignTaskRequest,
-  ): MaybePromise<AgentResult<AssignTaskData>>;
+  assignTask(req: AssignTaskRequest): MaybePromise<AgentResult<AssignTaskData>>;
   respondTask(
     req: RespondTaskRequest,
   ): MaybePromise<AgentResult<RespondTaskData>>;
@@ -554,10 +552,6 @@ export interface AgentPort {
 
   // V2 live diffs (Phase 5; Req 5.1–5.5). `shareDiff` is a mutation
   // (OFFLINE_QUEUED while offline); `listDiffs` reads succeed offline.
-  shareDiff(
-    req: ShareDiffRequest,
-  ): MaybePromise<AgentResult<ShareDiffData>>;
-  listDiffs(
-    req: ListDiffsRequest,
-  ): MaybePromise<AgentResult<ListDiffsData>>;
+  shareDiff(req: ShareDiffRequest): MaybePromise<AgentResult<ShareDiffData>>;
+  listDiffs(req: ListDiffsRequest): MaybePromise<AgentResult<ListDiffsData>>;
 }

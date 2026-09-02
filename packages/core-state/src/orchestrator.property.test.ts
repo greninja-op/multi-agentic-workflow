@@ -23,11 +23,17 @@ const memberPool = ["alice", "bob", "carol", "dave"];
 const liveStates: LivenessState[] = ["active", "idle", "gone"];
 
 test(
-  propertyTag(20, "Luna assignment never targets the requester and is deterministic"),
+  propertyTag(
+    20,
+    "Luna assignment never targets the requester and is deterministic",
+  ),
   () => {
     assertProperty(
       fc.property(
-        fc.uniqueArray(fc.constantFrom(...memberPool), { minLength: 1, maxLength: 4 }),
+        fc.uniqueArray(fc.constantFrom(...memberPool), {
+          minLength: 1,
+          maxLength: 4,
+        }),
         fc.integer({ min: 0, max: 3 }),
         fc.array(fc.constantFrom(...liveStates), { maxLength: 4 }),
         (members, requesterIdx, states) => {
@@ -44,11 +50,19 @@ test(
             tasks: [],
           };
           const brain = new RulesLunaBrain();
-          const d1 = brain.decide({ action: "assign", prompt: "do the work" }, context);
-          const d2 = brain.decide({ action: "assign", prompt: "do the work" }, context);
+          const d1 = brain.decide(
+            { action: "assign", prompt: "do the work" },
+            context,
+          );
+          const d2 = brain.decide(
+            { action: "assign", prompt: "do the work" },
+            context,
+          );
 
           // Determinism.
-          if (d1.assignment?.assigneeMemberId !== d2.assignment?.assigneeMemberId) {
+          if (
+            d1.assignment?.assigneeMemberId !== d2.assignment?.assigneeMemberId
+          ) {
             return false;
           }
           const others = members.filter((m) => m !== requesterId);

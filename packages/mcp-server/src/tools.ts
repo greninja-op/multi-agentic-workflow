@@ -102,12 +102,7 @@ const messageKindSchema = z.enum([
   "answer",
   "heads_up",
 ]);
-const lunaActionSchema = z.enum([
-  "assign",
-  "arbitrate",
-  "answer",
-  "summarize",
-]);
+const lunaActionSchema = z.enum(["assign", "arbitrate", "answer", "summarize"]);
 
 /** Serialise an envelope as both structured content and a JSON text block. */
 function toToolResult<T>(envelope: McpEnvelope<T>): CallToolResult {

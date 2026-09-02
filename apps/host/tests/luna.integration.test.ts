@@ -78,7 +78,8 @@ describe("V2 Luna orchestrator over WSS (Req 4.1–4.5)", () => {
 
     // Bob receives the task Luna assigned.
     const task = await b.waitFor(
-      (m) => m?.type === "task.update" && m.payload.task.assignee.memberId === "bob",
+      (m) =>
+        m?.type === "task.update" && m.payload.task.assignee.memberId === "bob",
     );
     expect(task.payload.task.assigner.memberId).toBe("luna");
     expect(task.payload.task.title).toContain("logout");
@@ -108,7 +109,9 @@ describe("V2 Luna orchestrator over WSS (Req 4.1–4.5)", () => {
     expect(reply.payload.action).toBe("answer");
     // Luna's answer is delivered to the asker as a message from luna.
     const message = await a.waitFor(
-      (m) => m?.type === "message.update" && m.payload.message.sender.memberId === "luna",
+      (m) =>
+        m?.type === "message.update" &&
+        m.payload.message.sender.memberId === "luna",
     );
     expect(message.payload.message.body).toContain("Luna:");
 

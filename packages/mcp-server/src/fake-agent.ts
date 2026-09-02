@@ -861,7 +861,10 @@ export class CoreStateAgentPort implements AgentPort {
       eventRevision,
     });
     if (!result.ok) {
-      return { ok: false, error: { code: result.code, message: result.reason } };
+      return {
+        ok: false,
+        error: { code: result.code, message: result.reason },
+      };
     }
     return { ok: true, data: { eventRevision } };
   }
@@ -881,7 +884,10 @@ export class CoreStateAgentPort implements AgentPort {
       eventRevision,
     });
     if (!result.ok) {
-      return { ok: false, error: { code: result.code, message: result.reason } };
+      return {
+        ok: false,
+        error: { code: result.code, message: result.reason },
+      };
     }
     return { ok: true, data: { eventRevision } };
   }
@@ -922,7 +928,10 @@ export class CoreStateAgentPort implements AgentPort {
       this.self.memberId,
     ]);
     this.liveness.recordActivity(this.session, this.self.memberId, now);
-    return { ok: true, data: { members: this.liveness.states(this.session, now) } };
+    return {
+      ok: true,
+      data: { members: this.liveness.states(this.session, now) },
+    };
   }
 
   wake(req: WakeRequest): AgentResult<WakeData> {

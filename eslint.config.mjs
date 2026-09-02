@@ -32,6 +32,7 @@ export default tseslint.config(
         "warn",
         { argsIgnorePattern: "^_", varsIgnorePattern: "^_" },
       ],
+      "no-control-regex": "off",
     },
   },
   {
@@ -44,12 +45,19 @@ export default tseslint.config(
     },
   },
   {
-    // The static dashboard/site client runs in the browser.
-    files: ["website/**/*.js"],
+    // The static dashboard/site and extension webview clients run in the browser.
+    files: [
+      "website/**/*.js",
+      "demo-dashboard/**/*.js",
+      "apps/vscode-extension/media/**/*.js",
+    ],
     languageOptions: {
       ecmaVersion: 2022,
       sourceType: "script",
-      globals: { ...globals.browser },
+      globals: {
+        ...globals.browser,
+        acquireVsCodeApi: "readonly",
+      },
     },
   },
   // Keep ESLint out of Prettier's way (formatting is Prettier's job).

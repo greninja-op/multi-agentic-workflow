@@ -68,7 +68,11 @@ describe("V2 tasks over WSS (Req 2.1–2.3)", () => {
     a.sendEvent(
       signedEvent(
         "task.assign",
-        { title: "Add logout", description: "wire /logout", assigneeMemberId: "bob" },
+        {
+          title: "Add logout",
+          description: "wire /logout",
+          assigneeMemberId: "bob",
+        },
         { session, device: alice, counter: a.nextCounter(), eventId: "t-1" },
       ),
     );

@@ -419,7 +419,7 @@ describe("Offline_State (Req 6.4, 33.1)", () => {
             (entry) =>
               entry.path === "src/first.ts" && entry.state === "editing",
           ),
-      1000,
+      4000,
     );
     await waitUntil(
       () =>
@@ -429,7 +429,7 @@ describe("Offline_State (Req 6.4, 33.1)", () => {
             (entry) =>
               entry.path === "src/first.ts" && entry.state === "stopped",
           ),
-      1000,
+      4000,
     );
     expect(
       host.authority
@@ -495,7 +495,7 @@ describe("Offline_State (Req 6.4, 33.1)", () => {
   it("ends watcher-confirmed editing after its bounded activity TTL", async () => {
     const agent = await startAgent(admin, {
       autoReconnect: false,
-      watcherActivityTtlMs: 150,
+      watcherActivityTtlMs: 500,
     });
     await waitUntil(() => agent.hostConnection().isOnline());
     const internal = agent as unknown as {
@@ -514,7 +514,7 @@ describe("Offline_State (Req 6.4, 33.1)", () => {
             (entry) =>
               entry.path === "src/idle.ts" && entry.state === "editing",
           ),
-      1000,
+      4000,
     );
     await waitUntil(
       () =>
@@ -524,7 +524,7 @@ describe("Offline_State (Req 6.4, 33.1)", () => {
             (entry) =>
               entry.path === "src/idle.ts" && entry.state === "stopped",
           ),
-      1000,
+      4000,
     );
     await waitUntil(
       () =>

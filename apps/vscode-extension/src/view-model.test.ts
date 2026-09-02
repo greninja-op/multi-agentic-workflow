@@ -442,8 +442,24 @@ describe("view-model — V2 liveness & notifications projection (Phase 3; Req 3.
       riskMap: emptyRisk,
       notifications: {
         notifications: [
-          { notificationId: "n1", toMemberId: "me", severity: "warn", source: "task", refId: "t-1", summary: "task", eventRevision: 1 },
-          { notificationId: "n2", toMemberId: "me", severity: "urgent", source: "wake", refId: "me", summary: "wake", eventRevision: 2 },
+          {
+            notificationId: "n1",
+            toMemberId: "me",
+            severity: "warn",
+            source: "task",
+            refId: "t-1",
+            summary: "task",
+            eventRevision: 1,
+          },
+          {
+            notificationId: "n2",
+            toMemberId: "me",
+            severity: "urgent",
+            source: "wake",
+            refId: "me",
+            summary: "wake",
+            eventRevision: 2,
+          },
         ],
       },
       connection: online,
@@ -530,7 +546,11 @@ describe("view-model — V2 live-diff projection (Phase 5; Req 5.5)", () => {
       staleness: fresh,
     });
     expect(vm.liveDiffs).toEqual([
-      { path: "src/api.ts", memberId: "alice", patch: "@@ -1 +1 @@\n-old\n+new" },
+      {
+        path: "src/api.ts",
+        memberId: "alice",
+        patch: "@@ -1 +1 @@\n-old\n+new",
+      },
     ]);
   });
 

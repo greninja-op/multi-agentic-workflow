@@ -89,7 +89,10 @@ function initialDetailHtml(viewModel: CoordinationViewModel): string {
     : '<div class="empty">No declared work reported yet.</div>';
   const files = member.files.length
     ? member.files
-        .map((file) => `<div class="file-row"><code>${escapeHtml(file.path)}</code></div>`)
+        .map(
+          (file) =>
+            `<div class="file-row"><code>${escapeHtml(file.path)}</code></div>`,
+        )
         .join("")
     : '<div class="empty">No active files reported yet.</div>';
   return `<h2>${escapeHtml(member.memberId)}</h2><div class="subtle">${escapeHtml(connectionLabel(member.connectionState))} · ${member.activityKnown ? "Activity reported" : "No activity reported"}</div><div class="section"><h3>Declared work</h3>${tasks}</div><div class="section"><h3>Current files</h3>${files}</div>`;

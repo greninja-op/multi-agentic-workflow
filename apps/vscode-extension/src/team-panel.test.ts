@@ -42,22 +42,27 @@ const viewModel: CoordinationViewModel = {
 
 describe("buildTeamPanelHtml", () => {
   it("renders the team shell while escaping dynamic state for the script context", () => {
-    const html = buildTeamPanelHtml(viewModel, "Team Demo", {
-      selfMemberId: "alice",
-      localDiffPreview: {
-        path: "src/demo.ts",
-        changedLines: 1,
-        truncated: false,
-        lines: [{ kind: "added", text: "const demo = true;" }],
+    const html = buildTeamPanelHtml(
+      viewModel,
+      "Team Demo",
+      {
+        selfMemberId: "alice",
+        localDiffPreview: {
+          path: "src/demo.ts",
+          changedLines: 1,
+          truncated: false,
+          lines: [{ kind: "added", text: "const demo = true;" }],
+        },
       },
-    }, {
-      cspSource: "vscode-webview://test",
-      scriptUri: "vscode-webview://test/media/team-panel.js",
-    });
+      {
+        cspSource: "vscode-webview://test",
+        scriptUri: "vscode-webview://test/media/team-panel.js",
+      },
+    );
 
     expect(html).toContain("CFLS Team Coordination");
     expect(html).toContain("Team members");
-    expect(html).toContain('script-src vscode-webview://test');
+    expect(html).toContain("script-src vscode-webview://test");
     expect(html).toContain('src="vscode-webview://test/media/team-panel.js"');
     expect(html).toContain('id="cfls-initial-state"');
     expect(html).toContain('"connectionState":"offline"');

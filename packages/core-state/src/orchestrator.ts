@@ -82,7 +82,8 @@ const STATE_RANK: Record<LivenessState, number> = {
 /** A short title derived from a prompt (first line, capped). */
 function titleFromPrompt(prompt: string): string {
   const firstLine = prompt.split(/\r?\n/, 1)[0]?.trim() ?? "";
-  const capped = firstLine.length > 72 ? `${firstLine.slice(0, 69)}…` : firstLine;
+  const capped =
+    firstLine.length > 72 ? `${firstLine.slice(0, 69)}…` : firstLine;
   return capped.length > 0 ? capped : "Task";
 }
 
@@ -227,7 +228,9 @@ export class RulesLunaBrain implements LunaBrain {
       parts.push(`Idle: ${idle.join(", ")}.`);
     }
     parts.push(
-      openTasks === 1 ? `1 task in progress.` : `${openTasks} tasks in progress.`,
+      openTasks === 1
+        ? `1 task in progress.`
+        : `${openTasks} tasks in progress.`,
     );
     return parts.join(" ");
   }
@@ -260,7 +263,8 @@ export class LlmLunaBrain implements LunaBrain {
         `Rephrase concisely for a dev team. Action: ${request.action}. ` +
           `Prompt: ${request.prompt}. Draft: ${base.summary}`,
       );
-      const summary = enriched.trim().length > 0 ? enriched.trim() : base.summary;
+      const summary =
+        enriched.trim().length > 0 ? enriched.trim() : base.summary;
       return {
         ...base,
         summary,

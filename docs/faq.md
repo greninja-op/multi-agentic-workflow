@@ -7,7 +7,7 @@ solve, and answers to the objections people most often raise.
 
 A real-time "who's working on what" layer for a team and their AI agents sharing
 one Git repo. It shares **activity metadata** (who's touching which file, locks,
-plans, messages) — never your source code — so you see a collision *before* it
+plans, messages) — never your source code — so you see a collision _before_ it
 happens instead of at merge time.
 
 ## Explain it like I'm not a programmer
@@ -16,19 +16,19 @@ Imagine your team is writing one big book together, and everyone keeps their own
 copy of it. The danger is obvious: two people rewrite the same page at the same
 time without knowing, and later someone has to painfully stitch the two versions
 back together. CFLS is the system that quietly says, out loud, "hey, Alice is
-writing on page 42 right now" — *before* you also start on page 42.
+writing on page 42 right now" — _before_ you also start on page 42.
 
 Here are the real words this project uses, in plain terms:
 
 - **Repository (repo)** — the shared project folder. Think of it as the whole
   book everyone is working on.
 - **Git** — the tool that already keeps every version of the book and stitches
-  edits together. It's excellent, but it only notices two people clashed *after*
+  edits together. It's excellent, but it only notices two people clashed _after_
   they've both written. CFLS does **not** replace Git; it sits next to it.
-- **Agent** — a small helper program that runs quietly on *your* computer. Think
+- **Agent** — a small helper program that runs quietly on _your_ computer. Think
   of it as your personal assistant who notices which page you've opened and tells
   the front desk, "my person is now working on page 42." It only reports what
-  you're *touching*, never what you're *writing*.
+  you're _touching_, never what you're _writing_.
 - **Host** — the front desk / receptionist for the whole team. Every assistant
   (Agent) reports to this one desk, and the desk tells everyone else what's going
   on. It's the single place that keeps the shared "who's doing what" board.
@@ -44,7 +44,7 @@ Here are the real words this project uses, in plain terms:
   that a human or another AI is already on a page — so CFLS gives them the same
   board to check, so they stop overwriting each other.
 - **Metadata** — "information about the work," not the work itself. CFLS shares
-  things like *which page* and *who* — never the actual sentences on the page.
+  things like _which page_ and _who_ — never the actual sentences on the page.
   Like a library index card that says a book is checked out, without photocopying
   the book.
 - **MCP** — simply the "language" the AI assistants use to read that board and to
@@ -55,7 +55,7 @@ Here are the real words this project uses, in plain terms:
 
 **The one-sentence version for anyone:** CFLS is a shared "who's working on what
 right now" board for a team (and their AI helpers), so people stop accidentally
-editing the same thing at the same time — and it does this by sharing *only* who
+editing the same thing at the same time — and it does this by sharing _only_ who
 is touching which file, never the actual work.
 
 ## The problem it solves
@@ -114,7 +114,7 @@ Beyond "see the collision," V2 lets the team **act**:
 
 - **It's not a lock at the OS level.** A plain text editor, a script, or `git`
   itself can still change a "hard-locked" file. CFLS only stops tools that choose
-  to cooperate (the extension, MCP agents). It's a *coordination* lock, not a
+  to cooperate (the extension, MCP agents). It's a _coordination_ lock, not a
   filesystem permission.
 - **It doesn't eliminate merge conflicts.** It reduces the avoidable ones. Two
   people editing the same function seconds apart, or offline, can still collide.
@@ -124,7 +124,7 @@ Beyond "see the collision," V2 lets the team **act**:
   invisible to the system — and invisible to everyone else's safety signal.
 - **It's host-based, not peer-to-peer / serverless.** Someone runs and maintains
   the Host.
-- **Metadata is still sensitive.** File names and activity leak *intent*. It's
+- **Metadata is still sensitive.** File names and activity leak _intent_. It's
   minimized, but it's not "nothing leaves your machine."
 - **MVP-level polish.** Storage is SQLite behind an interface (Postgres is future
   work); some flaky timing tests on Windows; deeper dependency-impact UX and
@@ -135,15 +135,15 @@ Beyond "see the collision," V2 lets the team **act**:
 
 ### "Isn't this just what Git is for?"
 
-No. Git manages *code history and merging* — it's fundamentally **after-the-fact**:
+No. Git manages _code history and merging_ — it's fundamentally **after-the-fact**:
 it finds conflicts when you merge, once the work already exists. CFLS is
-**before-the-fact**: it tells you someone is *currently* in that file so you never
+**before-the-fact**: it tells you someone is _currently_ in that file so you never
 write the conflicting code in the first place. They're complementary — Git stays
 the source of truth; CFLS is the early-warning radar around it.
 
 ### "Why not just use branches and pull requests?"
 
-Branches isolate you *until* merge, which is exactly when the collision surfaces.
+Branches isolate you _until_ merge, which is exactly when the collision surfaces.
 PRs review code that's already written. Neither tells you, in the moment, that a
 teammate is editing the same lines right now. CFLS fills that live-awareness gap.
 
@@ -151,15 +151,15 @@ teammate is editing the same lines right now. CFLS fills that live-awareness gap
 
 That's exactly the manual behavior CFLS automates. Manual pings are easy to
 forget, get buried, and AI agents can't read your intent from them. CFLS makes
-"who's on what" automatic, live, and machine-readable so both humans *and* coding
+"who's on what" automatic, live, and machine-readable so both humans _and_ coding
 agents respect it.
 
 ### "Google Docs / Live Share already do real-time co-editing — why not that?"
 
 Live co-editing merges everyone into one shared buffer and shares content. That's
 great for pairing on one file, but it doesn't scale to a whole repo, doesn't
-respect Git branches, and shares your actual code. CFLS coordinates the *whole
-project* by metadata and leaves the code in Git where it belongs.
+respect Git branches, and shares your actual code. CFLS coordinates the _whole
+project_ by metadata and leaves the code in Git where it belongs.
 
 ### "Doesn't file locking make teams slower, like old exclusive-lock VCS?"
 
@@ -169,7 +169,7 @@ a gate, precisely to avoid the "locked out, can't work" pain.
 
 ### "If it doesn't actually prevent edits, what's the point?"
 
-The point is the *decision*, not enforcement. Most conflicts happen because people
+The point is the _decision_, not enforcement. Most conflicts happen because people
 simply didn't know. Remove the not-knowing and most avoidable collisions
 disappear — the same reason a turn signal works even though it can't physically
 stop the other car.
@@ -187,7 +187,7 @@ stomping on each other.
 Source code never goes through CFLS (except the explicit, off-by-default
 live-diffs feature). Traffic is TLS + signed per-device; only invited members
 join; secrets and paths outside the repo are rejected. The honest caveat: file
-names and activity *are* shared with the team and Host, so treat that metadata as
+names and activity _are_ shared with the team and Host, so treat that metadata as
 operationally sensitive.
 
 ### "What happens if the server goes down?"
@@ -198,5 +198,5 @@ resumes when the Host is back.
 
 ### "Does this lock me into a vendor?"
 
-No. It sits *beside* your existing Git workflow. Stop running it and everything
+No. It sits _beside_ your existing Git workflow. Stop running it and everything
 works exactly as it did before — you just lose the live awareness.

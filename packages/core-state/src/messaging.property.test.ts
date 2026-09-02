@@ -58,9 +58,7 @@ test(
             messageId: `m-${s.eventRevision}`,
             kind: s.kind,
             sender: { memberId: memberIds[s.senderIdx]!, deviceId: "d" },
-            ...(s.kind === "direct"
-              ? { toMemberId: memberIds[s.toIdx]! }
-              : {}),
+            ...(s.kind === "direct" ? { toMemberId: memberIds[s.toIdx]! } : {}),
             priority: "normal",
             body: "x",
             eventRevision: s.eventRevision,
@@ -87,9 +85,7 @@ test(
             messageId: `m-${s.eventRevision}`,
             kind: s.kind,
             sender: { memberId: memberIds[s.senderIdx]!, deviceId: "d" },
-            ...(s.kind === "direct"
-              ? { toMemberId: memberIds[s.toIdx]! }
-              : {}),
+            ...(s.kind === "direct" ? { toMemberId: memberIds[s.toIdx]! } : {}),
             priority: "normal",
             body: "x",
             eventRevision: s.eventRevision,

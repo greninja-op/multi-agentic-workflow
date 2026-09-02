@@ -361,7 +361,10 @@ describe("revision-counter restore (Req 1.6)", () => {
 
 describe("snapshot — V2 messaging round-trip", () => {
   it("captures and restores messages, resuming the counter above their revision", () => {
-    const source: SessionRegistries = { ...fresh(), messages: new MessageRegistry() };
+    const source: SessionRegistries = {
+      ...fresh(),
+      messages: new MessageRegistry(),
+    };
     const rev = source.revisions.next(session); // 1
     source.messages!.append({
       session,
@@ -378,10 +381,15 @@ describe("snapshot — V2 messaging round-trip", () => {
     const snapshot = serializeSessionState(session, source);
     expect(snapshot.messages?.map((m) => m.messageId)).toEqual(["m-1"]);
 
-    const target: SessionRegistries = { ...fresh(), messages: new MessageRegistry() };
+    const target: SessionRegistries = {
+      ...fresh(),
+      messages: new MessageRegistry(),
+    };
     restoreSessionState(snapshot, target);
 
-    expect(target.messages!.allMessages(session).map((m) => m.messageId)).toEqual(["m-1"]);
+    expect(
+      target.messages!.allMessages(session).map((m) => m.messageId),
+    ).toEqual(["m-1"]);
     // bob still sees it as unread after restore.
     expect(target.messages!.unreadCountFor(session, "u-bob")).toBe(1);
     // the counter resumed above the message revision.
@@ -424,9 +432,9 @@ describe("snapshot — V2 tasks round-trip", () => {
 
     const target: SessionRegistries = { ...fresh(), tasks: new TaskRegistry() };
     restoreSessionState(snapshot, target);
-    expect(target.tasks!.taskListFor(session, "u-bob").map((t) => t.status)).toEqual([
-      "accepted",
-    ]);
+    expect(
+      target.tasks!.taskListFor(session, "u-bob").map((t) => t.status),
+    ).toEqual(["accepted"]);
     expect(target.revisions.next(session)).toBeGreaterThan(rev);
   });
 
@@ -456,7 +464,9 @@ describe("snapshot — V2 live-diffs round-trip", () => {
 
     const target: SessionRegistries = { ...fresh(), diffs: new DiffRegistry() };
     restoreSessionState(snapshot, target);
-    expect(target.diffs!.get(session, "u-alice", "src/api.ts")?.patch).toContain("+new");
+    expect(
+      target.diffs!.get(session, "u-alice", "src/api.ts")?.patch,
+    ).toContain("+new");
     expect(target.revisions.next(session)).toBeGreaterThan(rev);
   });
 

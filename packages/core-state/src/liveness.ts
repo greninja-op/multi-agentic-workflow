@@ -77,11 +77,7 @@ export class LivenessTracker {
   }
 
   /** Derive `memberId`'s liveness at `nowMs` (Req 3.1). */
-  stateOf(
-    session: SessionId,
-    memberId: string,
-    nowMs: number,
-  ): LivenessState {
+  stateOf(session: SessionId, memberId: string, nowMs: number): LivenessState {
     const state = this.sessions.get(sessionKey(session));
     if (state === undefined || !state.connected.has(memberId)) {
       return "gone";
@@ -97,7 +93,10 @@ export class LivenessTracker {
    * Derive the liveness state of every known member (connected members plus any
    * member with a recorded activity), at `nowMs`. Sorted by memberId.
    */
-  states(session: SessionId, nowMs: number): { memberId: string; state: LivenessState }[] {
+  states(
+    session: SessionId,
+    nowMs: number,
+  ): { memberId: string; state: LivenessState }[] {
     const state = this.sessions.get(sessionKey(session));
     if (state === undefined) {
       return [];

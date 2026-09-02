@@ -78,8 +78,7 @@ export interface WithdrawTaskRequest {
 
 /** Result of a task mutation: the updated task, or a typed rejection. */
 export type TaskResult =
-  | { ok: true; task: TaskDto }
-  | { ok: false; code: ErrorCode; reason: string };
+  { ok: true; task: TaskDto } | { ok: false; code: ErrorCode; reason: string };
 
 /** Pure in-memory registry of the human-directed task lifecycle (Req 2.1–2.3). */
 export class TaskRegistry {
@@ -168,9 +167,7 @@ export class TaskRegistry {
       task.assigner.memberId !== requesterId &&
       task.assignee.memberId !== requesterId
     ) {
-      return unauthorized(
-        "Only the assigner or assignee may withdraw a task.",
-      );
+      return unauthorized("Only the assigner or assignee may withdraw a task.");
     }
     if (
       task.status === "done" ||

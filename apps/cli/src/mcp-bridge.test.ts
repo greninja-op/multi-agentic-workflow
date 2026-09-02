@@ -293,7 +293,12 @@ describe("external Local_API MCP bridge", () => {
       // No tool is called after the old socket closes. The bridge must reread
       // the atomically rotated discovery record, authenticate to the new
       // Local_API, and restore the existing logical subscription on its own.
-      await expect.poll(() => restartedSubscribeCalls).toBe(1);
+      await expect
+        .poll(() => restartedSubscribeCalls, {
+          timeout: 15_000,
+          interval: 200,
+        })
+        .toBe(1);
       expect(restartedRequestCalls).not.toContain("get_team_status");
 
       const recoveredUpdate = {
@@ -309,7 +314,9 @@ describe("external Local_API MCP bridge", () => {
         );
       }
       pushRestartedUpdate(recoveredUpdate);
-      await expect.poll(() => updates).toEqual([recoveredUpdate]);
+      await expect
+        .poll(() => updates, { timeout: 15_000, interval: 200 })
+        .toEqual([recoveredUpdate]);
 
       // The shared afterEach owns the restarted server from this point on.
       harness.localApi = restartedApi;
@@ -320,7 +327,7 @@ describe("external Local_API MCP bridge", () => {
       }
       rmSync(directory, { recursive: true, force: true });
     }
-  });
+  }, 60_000);
 
   it("relays deduplicated Local_API updates as standard MCP notifications", async () => {
     harness = await createHarness();

@@ -51,7 +51,10 @@ const actionArb = fc.record({
 });
 
 test(
-  propertyTag(18, "task lifecycle is a valid state machine; terminals are sticky"),
+  propertyTag(
+    18,
+    "task lifecycle is a valid state machine; terminals are sticky",
+  ),
   () => {
     assertProperty(
       fc.property(fc.array(actionArb, { maxLength: 30 }), (actions) => {

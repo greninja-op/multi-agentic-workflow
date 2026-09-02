@@ -2,7 +2,7 @@
 
 > The complete, concrete technology plan. Decision: **full rewrite, Rust core, top-tier, latency-first, complexity is acceptable.** The **design** (protocol shape, identity model, ordering/conflict logic) carries over from the current implementation; the **implementation** is rebuilt natively.
 
-Companion to `architecture.md` (behavior) and `decisions.md` (rationale). This document is *only* about technology.
+Companion to `architecture.md` (behavior) and `decisions.md` (rationale). This document is _only_ about technology.
 
 ---
 
@@ -18,15 +18,15 @@ Companion to `architecture.md` (behavior) and `decisions.md` (rationale). This d
 
 ## 2. Language map
 
-| Component | Language | Notes |
-|---|---|---|
-| Host (central) | **Rust** | tokio; shares crates with Service. |
-| Service (per-machine daemon) | **Rust** | Single binary; also hosts the MCP bridge and local IPC. |
-| Agent Interface (MCP) | **Rust** (`rmcp`) | In-process with the Service; exposed to agents via a stdio bridge subcommand. |
-| Luna (orchestrator) | **Rust** | Rules engine + model-API client at the Host. |
-| Extension | **TypeScript** | VS Code extension host. |
-| Panel (webview UI) | **TypeScript + Svelte** | Compiles to tiny, fast JS. |
-| Shared protocol/types | **Rust (`serde`) → generated TS** | One schema, generated TypeScript for the Extension. |
+| Component                    | Language                          | Notes                                                                         |
+| ---------------------------- | --------------------------------- | ----------------------------------------------------------------------------- |
+| Host (central)               | **Rust**                          | tokio; shares crates with Service.                                            |
+| Service (per-machine daemon) | **Rust**                          | Single binary; also hosts the MCP bridge and local IPC.                       |
+| Agent Interface (MCP)        | **Rust** (`rmcp`)                 | In-process with the Service; exposed to agents via a stdio bridge subcommand. |
+| Luna (orchestrator)          | **Rust**                          | Rules engine + model-API client at the Host.                                  |
+| Extension                    | **TypeScript**                    | VS Code extension host.                                                       |
+| Panel (webview UI)           | **TypeScript + Svelte**           | Compiles to tiny, fast JS.                                                    |
+| Shared protocol/types        | **Rust (`serde`) → generated TS** | One schema, generated TypeScript for the Extension.                           |
 
 ---
 
@@ -34,16 +34,16 @@ Companion to `architecture.md` (behavior) and `decisions.md` (rationale). This d
 
 A single cargo workspace with focused crates. `[bin]` crates at the edges, pure `[lib]` crates in the middle.
 
-- **`cfls-protocol`** *(lib)* — the single source of truth for the wire: message catalog, envelope, DTOs, error codes, all as `serde` types. Annotated for TypeScript generation.
-- **`cfls-core`** *(lib, pure, no I/O)* — coordination logic: monotonic revision/ordering, conflict resolution (earliest-revision), lock/intent/presence registries, risk/impact, reconnect-sync, the task model, the mailbox model. *This is the Rust re-expression of today's `core-state`; the existing tests are its acceptance spec.*
-- **`cfls-crypto`** *(lib)* — Ed25519 device identity, signing/verification, signed invitations, revocation, replay guard, the encrypted-cache primitives.
-- **`cfls-transport`** *(lib)* — QUIC + WSS fallback, connection lifecycle, stream multiplexing, framing, the MessagePack codec, backpressure.
-- **`cfls-diff`** *(lib)* — the diff pipeline: live change-stream reconciliation over a proven text-diff engine.
-- **`cfls-mcp`** *(lib)* — the MCP tool definitions and handlers (`rmcp`).
-- **`cfls-luna`** *(lib)* — the orchestrator: deterministic rules engine + model-API client + decision points.
-- **`cfls-service`** *(bin)* — the daemon: file watcher, git reader, local IPC server, in-process MCP, mailbox, encrypted cache, host connection. Also the CLI entrypoint (`service` / `mcp` / `install` subcommands).
-- **`cfls-host`** *(bin)* — the central server: session authority, ordering, broadcast, persistence, Luna integration, diagnostics.
-- **`cfls-sim`** *(bin/test)* — the multi-agent simulation harness (one Host + N Services over real loopback transport).
+- **`cfls-protocol`** _(lib)_ — the single source of truth for the wire: message catalog, envelope, DTOs, error codes, all as `serde` types. Annotated for TypeScript generation.
+- **`cfls-core`** _(lib, pure, no I/O)_ — coordination logic: monotonic revision/ordering, conflict resolution (earliest-revision), lock/intent/presence registries, risk/impact, reconnect-sync, the task model, the mailbox model. _This is the Rust re-expression of today's `core-state`; the existing tests are its acceptance spec._
+- **`cfls-crypto`** _(lib)_ — Ed25519 device identity, signing/verification, signed invitations, revocation, replay guard, the encrypted-cache primitives.
+- **`cfls-transport`** _(lib)_ — QUIC + WSS fallback, connection lifecycle, stream multiplexing, framing, the MessagePack codec, backpressure.
+- **`cfls-diff`** _(lib)_ — the diff pipeline: live change-stream reconciliation over a proven text-diff engine.
+- **`cfls-mcp`** _(lib)_ — the MCP tool definitions and handlers (`rmcp`).
+- **`cfls-luna`** _(lib)_ — the orchestrator: deterministic rules engine + model-API client + decision points.
+- **`cfls-service`** _(bin)_ — the daemon: file watcher, git reader, local IPC server, in-process MCP, mailbox, encrypted cache, host connection. Also the CLI entrypoint (`service` / `mcp` / `install` subcommands).
+- **`cfls-host`** _(bin)_ — the central server: session authority, ordering, broadcast, persistence, Luna integration, diagnostics.
+- **`cfls-sim`** _(bin/test)_ — the multi-agent simulation harness (one Host + N Services over real loopback transport).
 
 ---
 
@@ -65,15 +65,18 @@ A single cargo workspace with focused crates. `[bin]` crates at the edges, pure 
 Three hops, each optimized:
 
 ### 5.1 Extension ↔ Service (local, same machine)
+
 - **Transport:** OS IPC — **Unix domain socket** (Linux/macOS) / **named pipe** (Windows). No TCP port, no loopback overhead.
 - **Framing:** length-prefixed **MessagePack** frames (JSON debug mode toggle).
 - **Auth:** per-session loopback token; the socket is user-private.
 
 ### 5.2 Agent ↔ Service (MCP)
+
 - **Transport:** the agent spawns **`cfls mcp`** (a subcommand of the same binary) which speaks **MCP over stdio** to the agent and forwards to the running daemon over the local IPC socket. The MCP protocol logic itself is **in-process** in `cfls-mcp` — the lowest-latency path.
 - **SDK:** `rmcp` (official Rust MCP SDK).
 
 ### 5.3 Service ↔ Host (WAN — the important one)
+
 - **Primary: QUIC** (`quinn`, TLS 1.3 via `rustls`):
   - **0-RTT / fast reconnect** — resuming a dropped link is near-instant.
   - **No head-of-line blocking** — independent streams for control, events, and bulk (diffs) so a big diff never stalls a small message.
@@ -95,11 +98,13 @@ Three hops, each optimized:
 ## 7. Data & persistence
 
 ### 7.1 Host
+
 - **Authoritative state in memory** (from `cfls-core`), for real-time speed.
 - **Durability:** an embedded, ACID, pure-Rust store — **`redb`** — holds the append-only event log, periodic state snapshots, membership, and the dependency/task data. On restart the in-memory state is rebuilt from the latest snapshot + log tail; ordering resumes strictly above the last revision.
 - **Scale path (deferred):** swap the store behind a trait for **Postgres** (`sqlx`) if multi-host/large-scale is ever needed. Not built now.
 
 ### 7.2 Service
+
 - **Device private key:** OS keychain via the **`keyring`** crate; encrypted-file fallback.
 - **Encrypted local cache** (last-known state per session): **ChaCha20-Poly1305** (or AES-256-GCM) with **Argon2id** key derivation. Metadata-only content (never secrets/source outside the boundary).
 
@@ -208,26 +213,26 @@ Three hops, each optimized:
 
 ## 19. Concrete dependency map (primary)
 
-| Concern | Rust crate(s) | TS package(s) |
-|---|---|---|
-| Async runtime | `tokio` | — |
-| QUIC + TLS | `quinn`, `rustls` | — |
-| WSS fallback | `tokio-tungstenite` | `ws` (only if needed) |
-| Serialization | `serde`, `rmp-serde`, `serde_json` | `@msgpack/msgpack` |
-| Cross-lang types | `typeshare` | (generated) |
-| Identity/crypto | `ed25519-dalek`, `argon2`, `chacha20poly1305`, `getrandom` | — |
-| Persistence (Host) | `redb` (later: `sqlx`+Postgres) | — |
-| Keychain | `keyring` | — |
-| File watching | `notify` | — |
-| Git | `git2` | — |
-| Diff | `similar` | — |
-| MCP | `rmcp` | — |
-| Model client (Luna) | `reqwest` | — |
-| Logging/metrics | `tracing`, `tracing-subscriber`, `metrics` | — |
-| Local IPC | `interprocess` (or tokio UDS/pipe) | node `net` |
-| Extension | — | VS Code API, `esbuild`, `vitest` |
-| Panel UI | — | `svelte`, `vite` |
-| Tooling | `clippy`, `rustfmt`, `cargo-nextest`, `cargo-deny`, `proptest`, `cargo-zigbuild` | `pnpm`, `eslint`, `prettier` |
+| Concern             | Rust crate(s)                                                                    | TS package(s)                    |
+| ------------------- | -------------------------------------------------------------------------------- | -------------------------------- |
+| Async runtime       | `tokio`                                                                          | —                                |
+| QUIC + TLS          | `quinn`, `rustls`                                                                | —                                |
+| WSS fallback        | `tokio-tungstenite`                                                              | `ws` (only if needed)            |
+| Serialization       | `serde`, `rmp-serde`, `serde_json`                                               | `@msgpack/msgpack`               |
+| Cross-lang types    | `typeshare`                                                                      | (generated)                      |
+| Identity/crypto     | `ed25519-dalek`, `argon2`, `chacha20poly1305`, `getrandom`                       | —                                |
+| Persistence (Host)  | `redb` (later: `sqlx`+Postgres)                                                  | —                                |
+| Keychain            | `keyring`                                                                        | —                                |
+| File watching       | `notify`                                                                         | —                                |
+| Git                 | `git2`                                                                           | —                                |
+| Diff                | `similar`                                                                        | —                                |
+| MCP                 | `rmcp`                                                                           | —                                |
+| Model client (Luna) | `reqwest`                                                                        | —                                |
+| Logging/metrics     | `tracing`, `tracing-subscriber`, `metrics`                                       | —                                |
+| Local IPC           | `interprocess` (or tokio UDS/pipe)                                               | node `net`                       |
+| Extension           | —                                                                                | VS Code API, `esbuild`, `vitest` |
+| Panel UI            | —                                                                                | `svelte`, `vite`                 |
+| Tooling             | `clippy`, `rustfmt`, `cargo-nextest`, `cargo-deny`, `proptest`, `cargo-zigbuild` | `pnpm`, `eslint`, `prettier`     |
 
 ---
 

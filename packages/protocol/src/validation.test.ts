@@ -582,9 +582,14 @@ describe("V2 liveness/notify/wake payload validation", () => {
   });
 
   it("accepts a wake.request with and without a reason", () => {
-    expect(validatePayload("wake.request", { targetMemberId: "carol" }).ok).toBe(true);
     expect(
-      validatePayload("wake.request", { targetMemberId: "carol", reason: "PR is blocked" }).ok,
+      validatePayload("wake.request", { targetMemberId: "carol" }).ok,
+    ).toBe(true);
+    expect(
+      validatePayload("wake.request", {
+        targetMemberId: "carol",
+        reason: "PR is blocked",
+      }).ok,
     ).toBe(true);
   });
 
@@ -658,7 +663,10 @@ describe("V2 live-diff payload validation (Phase 5; Req 5.1–5.5)", () => {
   });
 
   it("accepts a diff.share with an empty patch (removes the shared diff)", () => {
-    const result = validatePayload("diff.share", { path: "src/api.ts", patch: "" });
+    const result = validatePayload("diff.share", {
+      path: "src/api.ts",
+      patch: "",
+    });
     expect(result.ok).toBe(true);
   });
 

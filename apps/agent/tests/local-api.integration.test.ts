@@ -18,6 +18,7 @@ import {
   isLoopbackAddress,
   type LocalApiHandlers,
 } from "../src/local-api";
+import { waitUntil } from "./support";
 
 const TOKEN = "test-local-auth-token";
 
@@ -195,6 +196,7 @@ describe("Local_API token authentication (Req 2.5)", () => {
     );
     ws.close();
     await closed;
+    await waitUntil(() => unsubscribedIds.length === 1);
     expect(unsubscribedIds).toEqual(["sub-1"]);
   });
 

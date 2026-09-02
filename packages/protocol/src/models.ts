@@ -252,11 +252,7 @@ export interface CoordinationUpdate {
 
 /** How a Message is addressed / what it expects (Req 1.1, 1.3). */
 export type MessageKind =
-  | "direct"
-  | "broadcast"
-  | "question"
-  | "answer"
-  | "heads_up";
+  "direct" | "broadcast" | "question" | "answer" | "heads_up";
 
 /** How loudly a recipient should be alerted to a Message (Req 1.2). */
 export type MessagePriority = "fyi" | "normal" | "urgent";
@@ -300,12 +296,7 @@ export interface MessageDto {
  * either party may `withdrawn` it.
  */
 export type TaskStatus =
-  | "proposed"
-  | "accepted"
-  | "rejected"
-  | "in_progress"
-  | "done"
-  | "withdrawn";
+  "proposed" | "accepted" | "rejected" | "in_progress" | "done" | "withdrawn";
 
 /**
  * A shared unit of human-directed work (Req 2.1–2.3; idea.md §6). Tasks are the
@@ -343,11 +334,7 @@ export type NotifySeverity = "info" | "warn" | "urgent";
 
 /** What produced a notification (Req 3.2). */
 export type NotifySource =
-  | "message"
-  | "task"
-  | "question"
-  | "wake"
-  | "conflict";
+  "message" | "task" | "question" | "wake" | "conflict";
 
 /**
  * A surfaced alert for a human (Req 3.2). Carries only coordination metadata —

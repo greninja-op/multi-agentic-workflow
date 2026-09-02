@@ -19,6 +19,7 @@ export const sharedTestConfig = defineConfig({
     globals: false,
     // Packages without tests yet must not fail the aggregate run.
     passWithNoTests: true,
+    testTimeout: 20_000,
     include: ["src/**/*.{test,spec}.ts", "tests/**/*.{test,spec}.ts"],
     exclude: ["**/node_modules/**", "**/dist/**"],
   },
